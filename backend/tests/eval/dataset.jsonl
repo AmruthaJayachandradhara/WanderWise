@@ -1,0 +1,3 @@
+{"id": "weather-tokyo-routing", "query": "What is the weather in Tokyo next week?", "expected_router_tier": "small", "expected_assemble_tier": "large", "description": "Basic weather query - router should use small tier, assemble should use large tier"}
+{"id": "weather-paris-routing", "query": "Tell me about the weather in Paris this weekend", "expected_router_tier": "small", "expected_assemble_tier": "large", "description": "Weekend weather query - same tier expectations"}
+{"id": "weather-london-routing", "query": "Is it going to rain in London?", "expected_router_tier": "small", "expected_assemble_tier": "large", "description": "Rain-specific query - routing tier must stay small"}
