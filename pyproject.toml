@@ -1,0 +1,11 @@
+[project]
+name = "wanderwise"
+version = "0.1.0"
+description = "WanderWise Application"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.1"
+]
