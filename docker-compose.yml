@@ -1,0 +1,10 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    environment:
+      - FRONTEND_DIST_DIR=frontend/dist
+    # Qdrant and Redis are added in Phase 2/3
