@@ -5,7 +5,33 @@ description = "WanderWise Application"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.137.0",
+    "httpx>=0.28.1",
+    "langchain>=1.3.9",
+    "langchain-openai>=1.3.2",
+    "langgraph>=1.2.5",
+    "langsmith>=0.8.15",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
-    "python-dotenv>=1.0.1"
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.1",
+    "sse-starlette>=3.4.4",
+    "uvicorn[standard]>=0.49.0",
 ]
+
+[dependency-groups]
+dev = [
+    "hatchling>=1.30.1",
+    "pytest>=9.1.0",
+    "ruff>=0.15.17",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
