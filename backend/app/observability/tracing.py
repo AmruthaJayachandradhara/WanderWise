@@ -52,21 +52,30 @@ def init_tracing() -> None:
     _initialized = True
 
 
-def trace_metadata(tier: str, model: str) -> dict:
+def trace_metadata(
+    tier: str,
+    model: str,
+    prompt_id: str | None = None,
+    prompt_version: int | None = None,
+) -> dict:
     """Return a RunnableConfig fragment that records tier + model in traces.
 
-    Usage:
-        config = trace_metadata("small", "gemini-2.5-flash-lite")
-        ai_msg = chat_model.invoke(messages, config=config)
+    Optionally records prompt_id and prompt_version so every trace shows
+    which versioned prompt produced that run — makes prompt regressions
+    attributable to a specific prompt + version in LangSmith.
 
-    LangSmith will surface 'tier' and 'model' as metadata on the run,
-    making the routing decision visible at a glance in the trace explorer.
+    Usage:
+        config = trace_metadata("small", "gemini-2.5-flash-lite",
+                                prompt_id="orchestrator/router_intent",
+                                prompt_version=1)
+        ai_msg = chat_model.invoke(messages, config=config)
     """
+    metadata: dict = {"tier": tier, "model": model}
+    if prompt_id is not None:
+        metadata["prompt_id"] = prompt_id
+    if prompt_version is not None:
+        metadata["prompt_version"] = prompt_version
     return {
-        "metadata": {
-            "tier": tier,
-            "model": model,
-            "phase": "phase1",
-        },
+        "metadata": metadata,
         "tags": [tier, "wanderwise"],
     }

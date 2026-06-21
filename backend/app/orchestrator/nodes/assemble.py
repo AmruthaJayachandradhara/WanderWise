@@ -15,18 +15,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
 from backend.app.orchestrator.state import GraphState
+from backend.app.prompts.registry import get_prompt, render
 
 logger = logging.getLogger(__name__)
 
 _ASSEMBLE_TIER = "large"
-
-_SYSTEM_PROMPT = """\
-You are a helpful travel assistant. Given weather forecast data, write a short,
-friendly summary (3–5 sentences) that tells the traveller what to expect.
-Mention temperature range, any rain, and the general outlook. Be concise.
-If the forecast data is unavailable, say so honestly and suggest the user
-check a weather service before travelling.
-"""
+_PROMPT_ID = "orchestrator/assemble_itinerary"
 
 
 def assemble_node(state: GraphState) -> dict:
@@ -40,10 +34,12 @@ def assemble_node(state: GraphState) -> dict:
     else:
         context = json.dumps(weather, indent=2)
 
-    logger.info("Assemble: synthesising summary for location=%r degraded=%s", location, degraded)
+    p = get_prompt(_PROMPT_ID)
+    logger.info("Assemble: synthesising summary for location=%r degraded=%s prompt_version=%d",
+                location, degraded, p.version)
 
     messages = [
-        SystemMessage(content=_SYSTEM_PROMPT),
+        SystemMessage(content=render(_PROMPT_ID)),
         HumanMessage(content=f"Location: {location}\n\nForecast data:\n{context}"),
     ]
 

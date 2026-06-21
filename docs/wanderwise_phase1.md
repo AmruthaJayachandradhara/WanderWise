@@ -58,6 +58,15 @@ wanderwise/
 │   │   │   ├── __init__.py
 │   │   │   └── tracing.py             # LangSmith init; trace decorators; tier/token/latency capture
 │   │   │
+│   │   ├── prompts/                   # ← SEEDED Phase 1; grown every phase
+│   │   │   ├── __init__.py
+│   │   │   ├── schema.py              # Pydantic model: shape + validation of a prompt file
+│   │   │   ├── registry.py            # load / validate / cache / render
+│   │   │   └── library/
+│   │   │       └── orchestrator/      # maps to orchestrator/nodes/*.py
+│   │   │           ├── router_intent.yaml         # (Phase 1)
+│   │   │           └── assemble_itinerary.yaml    # (Phase 1)
+│   │   │
 │   │   ├── orchestrator/              # ← SKELETON Phase 1; extended every later phase
 │   │   │   ├── __init__.py
 │   │   │   ├── graph.py               # LangGraph graph definition (grows each phase)
@@ -110,7 +119,12 @@ wanderwise/
 │       │   └── .gitkeep
 │       └── eval/                      # ← SEEDED Phase 1 (harness + CI gate); grows every phase
 │           ├── dataset.jsonl          # labeled eval cases; starts tiny (routing + weather); grows each phase
-│           └── run_eval.py            # runs eval cases; deterministic checks only Phase 1; LLM-judge Phase 5
+│           ├── run_eval.py            # runs eval cases; deterministic checks only Phase 1; LLM-judge Phase 5
+│           ├── run_prompt_eval.py     # (new - Phase 1) per-prompt isolated eval runner
+│           └── cases/                 # (new - Phase 1) mirrors prompts/library/ exactly
+│               └── orchestrator/
+│                   ├── router_intent.jsonl
+│                   └── assemble_itinerary.jsonl
 │
 ├── frontend/
 │   └── src/
@@ -182,6 +196,10 @@ wanderwise/
 │   │   │   └── weather.py       # Open-Meteo + Nominatim wrapper (Step 4)
 │   │   ├── llm/                 # 2-tier abstraction: Gemini primary | Groq fallback (Step 2)
 │   │   ├── observability/       # LangSmith tracing setup (Step 3)
+│   │   ├── prompts/               # versioned prompt registry (seeded Phase 1)
+│   │   │   ├── schema.py          # PromptDefinition Pydantic model
+│   │   │   ├── registry.py        # get_prompt() + render()
+│   │   │   └── library/orchestrator/{router_intent,assemble_itinerary}.yaml
 │   │   ├── guardrails/          # (placeholder — Phase 3)
 │   │   ├── reliability/         # (placeholder — Phase 3)
 │   │   ├── memory/              # (placeholder — basic in Phase 2, advanced in Phase 3)
@@ -191,8 +209,10 @@ wanderwise/
 │   └── tests/
 │       ├── unit/
 │       └── eval/
-│           ├── dataset.jsonl    # handful of trivial cases (Step 8)
-│           └── run_eval.py      # deterministic checks; CI-gating (Step 8)
+│           ├── dataset.jsonl        # handful of trivial cases (Step 8)
+│           ├── run_eval.py          # deterministic checks; CI-gating (Step 8)
+│           ├── run_prompt_eval.py   # per-prompt eval runner; CI-gating (Phase 1)
+│           └── cases/orchestrator/  # eval cases for seeded prompts (Phase 1)
 ├── frontend/                    # Vite + React: minimal chat UI (Step 7)
 │   └── src/{components, hooks, api}/
 ├── data/{corpus, fixtures}/     # empty now; corpus in Phase 2, fixtures from Phase 2 on
@@ -216,7 +236,7 @@ The 10 steps are ordered by dependency — each builds on the last. Build inside
 | 5 | LangGraph skeleton + state schema + router stub + Weather agent | 2, 3, 4 |
 | 6 | FastAPI streaming endpoint (SSE) | 5 |
 | 7 | Minimal React chat UI | 6 |
-| 8 | Eval harness skeleton + CI gate stub | 5 |
+| 8 | Eval harness skeleton + prompt registry seed + CI gate stub | 5 |
 | 9 | Deploy skeleton to chosen platform | 6, 7, 8 |
 | 10 | Verify the exit milestone | all |
 
@@ -345,6 +365,10 @@ The 10 steps are ordered by dependency — each builds on the last. Build inside
 
 **Done when:** a push runs CI, the eval cases pass, and deliberately breaking the router tier makes CI go red.
 
+**Prompt versioning (companion to Step 8):** Alongside the eval harness, seed the prompt registry. Move both existing Phase 1 prompts (the router extraction prompt and the assemble summary prompt) verbatim into versioned YAML files under `prompts/library/orchestrator/`. The registry (`registry.py`) loads, validates, and caches them via `get_prompt()`; a single `render()` call replaces every inline f-string. Wire `run_prompt_eval.py` to run *before* the full-graph gate in CI, so a prompt regression (e.g., changing expected JSON fields) turns CI red at the prompt layer — a precise, fast signal before the slower full-graph run. Extend `trace_metadata()` to accept `prompt_id` and `prompt_version` so every trace records which prompt version produced that run.
+
+**Done when:** both prompts load from YAML; `run_prompt_eval.py` passes in CI; changing the expected JSON schema in a prompt's eval cases makes that prompt's gate (and only it) go red.
+
 ---
 
 ## Step 9 — Deploy the skeleton to the chosen platform
@@ -389,6 +413,9 @@ If all five hold, Phase 1 is done and every architectural layer has a proven hom
 - [ ] FastAPI SSE endpoint streams; health check present; auth-ready route shape.
 - [ ] Minimal React chat UI streams responses.
 - [ ] Eval harness runs in CI and gates the build; breaking the router turns CI red.
+- [ ] Prompt registry seeded: `router_intent` and `assemble_itinerary` load from versioned YAML; nodes call `render()` instead of inline strings.
+- [ ] Per-prompt eval (`run_prompt_eval.py`) runs in CI before the full-graph gate; changing a prompt's eval cases makes only that prompt's gate red.
+- [ ] `trace_metadata()` accepts `prompt_id` + `prompt_version`; traces record which prompt version ran.
 - [ ] Skeleton deployed to a live public URL; CI deploys on merge to `main`.
 - [ ] Exit milestone (Step 10) verified end-to-end.
 
@@ -398,8 +425,10 @@ If all five hold, Phase 1 is done and every architectural layer has a proven hom
 
 To hold the scope line: no RAG, no Travel Search/Duffel, no guardrails, no retry/self-reflection, no memory beyond a single hardcoded profile, no booking or actions, no complexity-based routing (deterministic only), no LLM-judge evals, no dashboards, no frontend polish. If you find yourself building any of these, you've crossed into Phase 2+.
 
+No prompt changes per se — the two Phase 1 prompts are migrated verbatim (behavior-identical). Per-prompt LLM-judge eval is Phase 5.
+
 ---
 
 ## Hand-off to Phase 2
 
-Phase 2 ("Core Data Agents + Router") builds the first genuinely useful capability on this skeleton: the **Travel Search agent** (Duffel flights + Stays search with budget filtering), the **RAG agent** (ingestion pipeline, hybrid vector+BM25 retrieval, cross-encoder rerank, citations, 50 curated countries), the **router going active** across multiple agents, **orchestrator planning with parallelism** (flight search ∥ weather), and **budget reasoning**. Per the design review, Phase 2 also folds in **basic memory** (load the hardcoded profile at session start + carry session state) and **seeds retrieval eval cases** as RAG is built — and starts **capturing demo fixtures** so the growing demo is protected from rate limits and flaky sandboxes from here on. The exit milestone: the Japan query returns a budget-aware itinerary with visa and weather, routing visible in traces.
+Phase 2 ("Core Data Agents + Router") builds the first genuinely useful capability on this skeleton: the **Travel Search agent** (Duffel flights + Stays search with budget filtering), the **RAG agent** (ingestion pipeline, hybrid vector+BM25 retrieval, cross-encoder rerank, citations, 50 curated countries), the **router going active** across multiple agents, **orchestrator planning with parallelism** (flight search ∥ weather), and **budget reasoning**. Per the design review, Phase 2 also folds in **basic memory** (load the hardcoded profile at session start + carry session state) and **seeds retrieval eval cases** as RAG is built — and starts **capturing demo fixtures** so the growing demo is protected from rate limits and flaky sandboxes from here on. Phase 2 also completes the **agent-symmetry refactor**: Weather's location/date extraction moves out of `router_node` and into `weather_node` via its own versioned prompt (`weather/argument_extraction.yaml`), making every specialist agent symmetric — own prompt, own extraction, own tool call. The exit milestone: the Japan query returns a budget-aware itinerary with visa and weather, routing visible in traces.

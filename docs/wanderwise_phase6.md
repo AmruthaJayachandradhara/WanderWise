@@ -208,6 +208,7 @@ Polish the UI (1–4), harden the demo (5–7), then document and finalize (8–
 **Build (`README.md`):**
 - Lead with a crisp **overview** (what it is, the orchestration framing), the **architecture diagram** (Step 8), the **dashboard screenshots** (Phase 5), the **demo video link** (Step 7), and concise **setup/run instructions** (local + the live URL).
 - Summarize the production-shaped capabilities (routing, guardrails, reliability, advanced RAG, memory, real booking + booking abstraction, always-on observability, CI-gated eval) — each in a line, linking to where it lives.
+- Summarize the **prompt versioning** story in one line: "every prompt is externalized as a versioned YAML, independently eval-gated in CI, and every trace records the prompt version — a regression points at a specific prompt+version." Link to `backend/app/prompts/library/` so it's inspectable.
 - Follow copyright/attribution hygiene for any third-party data sources (travel.state.gov, CDC, OSM/ODbL attribution for Overpass data).
 
 **Key detail:** structure for skimming — a recruiter forms an impression from the README's first screen. Lead with the diagram and the demo link; depth is one scroll down. The README is a portfolio artifact in its own right.
@@ -222,6 +223,7 @@ Polish the UI (1–4), harden the demo (5–7), then document and finalize (8–
 
 **Build (`docs/interview-prep.md`):**
 - Map each component to a JD ask (from the design doc Section 15): **orchestration** ("RAG is one tool among many"), **cost/latency** (routing + cost-by-tier dashboard), **reliability** (induce a hallucination, show the self-reflection loop catch it), **trustworthiness** (CI eval-gate blocking deploys; staleness warnings), **FDE-specific** (broad tool integration, graceful degradation everywhere, a live fault-tolerant deployment).
+  - **Prompt versioning -> eval rigor ask:** "every prompt is a versioned artifact with its own eval cases; CI gates each prompt independently before running the full graph; traces record `prompt_id` + `version` so a regression is attributable to a specific prompt at a specific version." This is the answer to "how do you manage LLM prompt drift?"
 - Finalize the **resume line** (design doc Section 15) and rehearse the "principled call where no API exists" story (mock reservation service behind the `BookingProvider` contract).
 
 **Verify the exit milestone:**
@@ -245,6 +247,8 @@ Polish the UI (1–4), harden the demo (5–7), then document and finalize (8–
 - [ ] Architecture diagram rendered and legible.
 - [ ] README finalized: overview, diagram, dashboard screenshots, demo video, setup — skimmable.
 - [ ] Interview-prep doc maps components to JD asks; resume line finalized.
+- [ ] README mentions the prompt library, versioning, and per-prompt CI eval in the capabilities summary.
+- [ ] Interview-prep doc includes the prompt-versioning narrative mapped to "how do you handle prompt drift / LLM regression."
 - [ ] Exit milestone verified — recruiter-ready, walkable diagram → code → trace → dashboard.
 
 ---
@@ -257,4 +261,4 @@ No new capability, no architecture or eval/dashboard changes. Anything tempting 
 
 ## Project complete
 
-At the end of Phase 6, WanderWise is a deployed, production-shaped agentic AI system with: a LangGraph orchestrator, 2-tier LLM routing, input/output guardrails, infra + self-reflection reliability, an advanced RAG subsystem (hybrid retrieval, decomposition, staleness-triggered re-ingestion), short/long-term memory + semantic caching, real flight booking via Duffel and a provider-agnostic booking abstraction, always-on tracing, a CI-gated eval suite, live dashboards, and a hardened, recruiter-ready demo. Every capability maps to an AI Engineer / FDE interview ask, and every claim is backed by something you can show: code, a trace, a dashboard, or a passing gate.
+At the end of Phase 6, WanderWise is a deployed, production-shaped agentic AI system with: a LangGraph orchestrator, 2-tier LLM routing, input/output guardrails, infra + self-reflection reliability, an advanced RAG subsystem (hybrid retrieval, decomposition, staleness-triggered re-ingestion), short/long-term memory + semantic caching, real flight booking via Duffel and a provider-agnostic booking abstraction, a versioned prompt library with per-prompt CI eval gate, always-on tracing, a CI-gated eval suite, live dashboards, and a hardened, recruiter-ready demo. Every capability maps to an AI Engineer / FDE interview ask, and every claim is backed by something you can show: code, a trace, a dashboard, or a passing gate.
