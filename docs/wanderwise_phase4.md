@@ -88,12 +88,26 @@ wanderwise/
 │   │   │   ├── input.py             # (unchanged)
 │   │   │   ├── pii.py               # (unchanged)
 │   │   │   └── output.py            # no-hallucinated-booking now ENFORCED + tested (extended)
+│   │   ├── prompts/                     # (extended)
+│   │   │   └── library/
+│   │   │       ├── orchestrator/
+│   │   │       │   └── decompose_query.yaml         # (new)
+│   │   │       ├── activities_booking/
+│   │   │       │   ├── search_extraction.yaml       # (new)
+│   │   │       │   └── selection_reasoning.yaml     # (new)
+│   │   │       └── action/
+│   │   │           └── email_drafting.yaml          # (new)
 │   │   ├── memory/ reliability/ llm/ observability/ state/   # (unchanged)
 │   └── tests/
 │       ├── unit/                    # + reservation-service semantics tests (extended)
 │       └── eval/
 │           ├── dataset.jsonl        # + decomposition (multi-passport/city) cases (extended)
-│           └── run_eval.py          # + decomposition correctness + booking-gate checks (extended)
+│           ├── run_eval.py          # + decomposition correctness + booking-gate checks (extended)
+│           └── cases/                   # (extended)
+│               ├── orchestrator/decompose_query.jsonl      # (new)
+│               ├── activities_booking/search_extraction.jsonl   # (new)
+│               ├── activities_booking/selection_reasoning.jsonl # (new)
+│               └── action/email_drafting.jsonl              # (new)
 ├── frontend/                        # + reservation confirmation + action-draft UI (extended)
 │   └── src/{components, hooks, api}/
 ├── data/
@@ -191,6 +205,8 @@ Booking abstraction + mock service first (1–2), real booking + gate enforcemen
 - **Low-risk, automatic:** generate a calendar hold as an **`.ics`** file (via `icalendar`) — no key, no external write, safe to do automatically.
 - **High-risk, gated:** draft the booking summary + itinerary email but **do not send** — surface it for confirmation via a **graph-edge confirmation gate** (a LangGraph interrupt). Sending (or real booking) only proceeds past the gate on explicit user confirmation.
 
+**Prompt:** `action/email_drafting.yaml` (large tier). The email drafting system prompt lives here — separate from the calendar generation which is code-only.
+
 **Key detail:** the confirmation gate is a *graph edge*, not a model decision (Section 12). The high-risk path structurally cannot complete without passing the gate. This risk-tiering — auto for `.ics`, gated for email/booking — is the Responsible-AI story for action-taking.
 
 **Done when:** a calendar `.ics` is auto-created; an itinerary email is drafted and held at the confirmation gate; confirming releases it, declining discards it.
@@ -207,6 +223,8 @@ Booking abstraction + mock service first (1–2), real booking + gate enforcemen
 - **Events are search-only** — surface a deep link; no in-app ticketing (partner-gated, real money).
 - Search calls on `small` tier; selection reasoning on `large`.
 
+**Prompts:** `activities_booking/search_extraction.yaml` (small tier, argument extraction) and `activities_booking/selection_reasoning.yaml` (large tier, venue selection reasoning). Both use `render()` — no inline strings.
+
 **Key detail:** the symmetry is the point — a restaurant reservation and a flight booking go through the *same* interface despite one being real-API and one being self-built. That's what makes "swap in OpenTable as a config change" true rather than aspirational.
 
 **Done when:** restaurants and events are found for the destination; a chosen restaurant reserves through the mock service and returns a confirmation ID; events surface as deep links.
@@ -221,6 +239,8 @@ Booking abstraction + mock service first (1–2), real booking + gate enforcemen
 - A **decomposition node** (`small` tier) that splits a multi-part query into sub-queries: *"one US passport, one Indian passport → Japan"* → two visa lookups (US→JP, IN→JP); *"Tokyo then Kyoto then Osaka"* → per-city retrieval.
 - The RAG agent **fans out** — retrieves per sub-query independently (reusing the Phase 2 pipeline) — and the synthesis step (`large`) **merges** into one grounded, per-traveler/per-city answer.
 - Decomposition-aware planning: the plan node accounts for the fan-out when deciding parallelism.
+
+**Prompt:** `orchestrator/decompose_query.yaml` (small tier). Decomposition eval cases (split correctness + per-traveler merge quality) are wired to this prompt's per-prompt gate, isolating decomposition regressions from the full-graph gate.
 
 **Key detail:** this is the capability the headline demo query was written around. Decompose → retrieve-per-subquery → merge is the structure; make sure the merge produces a *per-traveler* answer ("US passport: visa-free 90 days; Indian passport: visa required") rather than a mushed-together one. Both the split and the merge are eval-checked in Step 9.
 
@@ -291,15 +311,17 @@ Booking abstraction + mock service first (1–2), real booking + gate enforcemen
 - [ ] Decomposition + booking-gate eval cases in the CI gate; reservation-semantics unit tests in CI.
 - [ ] Full multi-passport narrative replays from fixtures.
 - [ ] Exit milestone verified end-to-end on the live URL.
+- [ ] All Phase 4 nodes call `render(...)` — no inline prompt strings added; the full prompt library now covers all five agent types.
+- [ ] `decompose_query.yaml`, `activities_booking/` and `action/email_drafting.yaml` eval cases wired into the per-prompt CI gate.
 
 ---
 
 ## What is NOT in Phase 4 (deferred)
 
-No real payments / real money (sandbox + mock only — by design), no eval *depth* beyond the cases needed to gate this phase (LLM-judge breadth and the full ~40-case set are Phase 5), no observability dashboards (Phase 5), no CI/CD hardening beyond the existing gate (Phase 5), no frontend polish (Phase 6).
+No real payments / real money (sandbox + mock only — by design), no eval *depth* beyond the cases needed to gate this phase (LLM-judge breadth and the full ~40-case set are Phase 5), no observability dashboards (Phase 5), no CI/CD hardening beyond the existing gate (Phase 5), no frontend polish (Phase 6). No per-prompt LLM-judge eval (Phase 5). No prompt dashboard breakdown (Phase 5).
 
 ---
 
 ## Hand-off to Phase 5
 
-Phase 5 ("Eval Depth, Dashboards & CI/CD") makes the quality and observability story airtight and gates it. The eval harness — seeded in Phase 1 and grown every phase — is now **expanded to the full ~40-case set** (retrieval Hit@k, faithfulness via LLM-judge, decomposition correctness, routing accuracy, guardrail precision/recall, itinerary budget/temporal validity) and split into **deterministic** (always-run, CI-gating) vs. **LLM-as-judge** (sampled). The **CI eval gate** is hardened so a regression below threshold fails the build and blocks deploy. **LangSmith dashboards** surface latency, **token cost by tier**, **cache-hit rate**, **retry rate**, and eval scores over time — the live artifact you screen-share in interviews (mind the free-tier trace cap via the Phase 1 sampling flag). The **GitHub Actions CI/CD** pipeline finalizes lint + test + eval-gate + deploy. Exit milestone: a recruiter opens the URL, runs the full demo, and sees dashboards plus a passing eval gate — with a deliberate regression demonstrably turning the gate red.
+Phase 5 ("Eval Depth, Dashboards & CI/CD") makes the quality and observability story airtight and gates it. The eval harness — seeded in Phase 1 and grown every phase — is now **expanded to the full ~40-case set** (retrieval Hit@k, faithfulness via LLM-judge, decomposition correctness, routing accuracy, guardrail precision/recall, itinerary budget/temporal validity) and split into **deterministic** (always-run, CI-gating) vs. **LLM-as-judge** (sampled). The **CI eval gate** is hardened so a regression below threshold fails the build and blocks deploy. **LangSmith dashboards** surface latency, **token cost by tier**, **cache-hit rate**, **retry rate**, and eval scores over time — the live artifact you screen-share in interviews (mind the free-tier trace cap via the Phase 1 sampling flag). The **GitHub Actions CI/CD** pipeline finalizes lint + test + eval-gate + deploy. Exit milestone: a recruiter opens the URL, runs the full demo, and sees dashboards plus a passing eval gate — with a deliberate regression demonstrably turning the gate red. Phase 5 also completes the prompt-versioning story: the full ~40-case set splits into deterministic vs. LLM-judge, and a dashboard panel shows eval scores broken down by `prompt_id` and `version` — the trace metadata seeded in Phase 1 makes this a query, not new instrumentation.

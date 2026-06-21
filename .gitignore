@@ -3,3 +3,6 @@ __pycache__/
 node_modules/
 .venv/
 data/vector_db/
+frontend/dist/
+*.egg-info/
+

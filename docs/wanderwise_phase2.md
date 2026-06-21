@@ -67,6 +67,18 @@ wanderwise/
 │   │   │   └── embeddings.py        # Gemini Embedding (bge-small fallback)
 │   │   ├── memory/                  # (new — basic only)
 │   │   │   └── session.py           # profile load at session start; session state carry
+│   │   ├── prompts/                     # (extended)
+│   │   │   └── library/
+│   │   │       ├── orchestrator/
+│   │   │       │   └── plan_dispatch.yaml           # (new)
+│   │   │       ├── weather/
+│   │   │       │   └── argument_extraction.yaml     # (new — extraction moved from router)
+│   │   │       ├── travel_search/
+│   │   │       │   ├── argument_extraction.yaml     # (new)
+│   │   │       │   └── offer_ranking.yaml           # (new)
+│   │   │       └── rag/
+│   │   │           ├── query_rewrite.yaml           # (new)
+│   │   │           └── synthesis.yaml               # (new)
 │   │   ├── llm/                     # (unchanged)
 │   │   ├── observability/           # (unchanged)
 │   │   ├── state/                   # profile store (unchanged — hardcoded demo profile)
@@ -77,7 +89,14 @@ wanderwise/
 │       ├── unit/                    # (unchanged)
 │       └── eval/
 │           ├── dataset.jsonl        # + retrieval/routing/budget cases (extended)
-│           └── run_eval.py          # + Hit@k + tier-match + budget checks (extended)
+│           ├── run_eval.py          # + Hit@k + tier-match + budget checks (extended)
+│           └── cases/                   # (extended — new cases per new prompt)
+│               ├── orchestrator/plan_dispatch.jsonl
+│               ├── weather/argument_extraction.jsonl
+│               ├── travel_search/argument_extraction.jsonl
+│               ├── travel_search/offer_ranking.jsonl
+│               ├── rag/query_rewrite.jsonl
+│               └── rag/synthesis.jsonl
 ├── frontend/                        # + minimal itinerary/budget/citation rendering (extended)
 │   └── src/{components, hooks, api}/
 ├── data/
@@ -163,6 +182,8 @@ Travel Search first (steps 1–5), then RAG (steps 6–8), then eval/fixtures an
 
 **Key detail:** the value of LangGraph over a single ReAct prompt shows up here — parallelism and per-node tracing are graph properties, not prompt hopes. Make sure the trace clearly shows the parallel branches and the tier each node used.
 
+**Agent symmetry (prompt-versioning thread):** As part of making every specialist agent symmetric, Weather's location/date extraction moves out of `router_node` and into `weather_node` via `prompts/library/weather/argument_extraction.yaml`. After this, `router_intent.yaml` shrinks to tier-resolution only and stops performing any agent's extraction. `weather_node` gains its own small-tier extraction call (from `state["query"]`), identical in shape to how every other specialist agent will extract its own arguments. `plan_dispatch.yaml` is added for the plan node.
+
 **Done when:** a trip query dispatches flights ∥ weather ∥ (later) RAG in parallel, merges them, and the trace shows the parallel structure plus per-node tier.
 
 ---
@@ -239,6 +260,8 @@ Travel Search first (steps 1–5), then RAG (steps 6–8), then eval/fixtures an
 - Wire the deterministic checks into `run_eval.py` so the **CI gate** now guards retrieval and budget correctness, not just "non-empty response."
 - **Demo fixtures:** capture known-good Duffel responses and RAG results for the Japan narrative into `data/fixtures/`. The demo can run against these when sandboxes are flaky or the Gemini daily quota is tight (Challenge #1, #4). Never let a live rate-limit kill a recruiter walkthrough.
 
+Wire each new prompt's eval cases into the CI gate alongside the retrieval/routing/budget cases — the per-prompt eval step (added in Phase 1) runs before the full-graph gate and now covers all six new Phase 2 prompts.
+
 **Key detail:** capturing fixtures now (not in Phase 6) means every subsequent phase's demo is replayable. The fixture set grows with the demo instead of being reconstructed at the end under pressure.
 
 **Done when:** CI runs the new eval cases and fails on a regression; the Japan demo can be replayed entirely from fixtures with no live calls.
@@ -274,15 +297,20 @@ Travel Search first (steps 1–5), then RAG (steps 6–8), then eval/fixtures an
 - [ ] Eval cases for Hit@5, routing, budget wired into the CI gate.
 - [ ] Demo fixtures captured; Japan demo replays with no live calls.
 - [ ] Exit milestone verified end-to-end on the live URL.
+- [ ] Agent symmetry: Weather's extraction prompt is in `weather/argument_extraction.yaml`; `router_intent.yaml` no longer does any agent's extraction.
+- [ ] All Phase 2 nodes call `render(...)` — no inline prompt strings created.
+- [ ] All new prompts have eval cases wired into the per-prompt CI gate.
 
 ---
 
 ## What is NOT in Phase 2 (deferred)
 
-No guardrails (input or output), no retry/self-reflection, no advanced memory (rolling summary, write policy, semantic cache), no booking or actions, **no query decomposition** (multi-passport/multi-city is Phase 4), no staleness/re-ingestion (the hooks are seeded, the job is Phase 4), no complexity-based routing, no LLM-judge evals, no dashboards, no frontend polish.
+No guardrails (input or output), no retry/self-reflection, no advanced memory (rolling summary, write policy, semantic cache), no booking or actions, **no query decomposition** (multi-passport/multi-city is Phase 4), no staleness/re-ingestion (the hooks are seeded, the job is Phase 4), no complexity-based routing, no LLM-judge evals, no dashboards, no frontend polish. No guardrail prompts (Phase 3). No decompose/booking/action prompts (Phase 4). Per-prompt LLM-judge eval is Phase 5.
 
 ---
 
 ## Hand-off to Phase 3
 
 Phase 3 ("Guardrails, Reliability & Advanced Memory") hardens the now-useful system so it behaves correctly under adversarial and failure conditions: **input guardrails** (topicality, prompt-injection, PII redaction via Presidio), **output guardrails** (grounding/faithfulness, schema, budget — the budget check drops onto Step 5's structured output; the no-hallucinated-booking gate is *designed* here but tested in Phase 4 where booking lands), **infra retry** (backoff + fallback model + circuit breaker), the **self-reflection / critique-and-retry subgraph**, and **advanced memory** (rolling session summary, long-term write policy, semantic + API caching). Red-team eval cases get written as the guardrails are built. Exit milestone: a red-team input is blocked, an induced hallucination is caught and corrected, a stored preference is recalled across sessions, and a cache hit visibly cuts latency.
+
+Phase 3 adds the guardrail prompts (`guardrails/input_topicality.yaml`, `input_injection.yaml`, `output_grounding.yaml`, etc.) and the self-reflection critic prompt — guardrail prompts use red-team eval datasets with block-rate/false-block-rate metrics.
