@@ -31,6 +31,13 @@ jobs:
       - name: Run pytest
         run: uv run pytest backend/tests/unit/ -v --tb=short
 
+      - name: Run per-prompt eval gate
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LANGSMITH_TRACING: "false"
+          TRACE_SAMPLING: "0"
+        run: uv run python backend/tests/eval/run_prompt_eval.py
+
       - name: Run eval gate
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
