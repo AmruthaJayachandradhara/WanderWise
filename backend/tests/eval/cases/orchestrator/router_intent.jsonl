@@ -1,3 +1,3 @@
-{"id": "router-tokyo-weather", "inputs": {}, "human_input": "What is the weather in Tokyo next week?", "description": "Basic weather query — output must parse as JSON with task_type and location fields"}
-{"id": "router-paris-weekend", "inputs": {}, "human_input": "Tell me about the weather in Paris this weekend", "description": "Weekend weather query — schema fields must be present"}
-{"id": "router-unknown-location", "inputs": {}, "human_input": "What will the weather be like tomorrow?", "description": "Ambiguous query without a city — router must return schema with location: unknown"}
+{"id": "router-tokyo-trip", "inputs": {}, "human_input": "Plan a 7-day trip to Tokyo for 2 adults", "description": "Full trip query — output must parse as JSON with task_type field"}
+{"id": "router-paris-weekend", "inputs": {}, "human_input": "Tell me about the weather in Paris this weekend", "description": "Weather query — schema field task_type must be present"}
+{"id": "router-visa-japan", "inputs": {}, "human_input": "Do I need a visa to visit Japan with a US passport?", "description": "Visa query — router must return task_type only, no location field required"}

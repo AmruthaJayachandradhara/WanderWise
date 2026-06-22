@@ -1,0 +1,44 @@
+prompt_id: orchestrator/plan_dispatch
+version: 1
+tier: large
+status: active
+description: >
+  Decides which agents are needed for the user's query based on query
+  content and profile context. Returns agents_needed as a list. Used by
+  plan_node; result is metadata for traces only — graph topology is static.
+
+template: |
+  You are a travel planning orchestrator. Given the user query and profile,
+  decide which agents are needed to answer it.
+  Available agents: travel_search, weather, rag
+
+  Respond with valid JSON only — no markdown, no explanation:
+  {{"agents_needed": ["travel_search", "weather", "rag"]}}
+
+  Rules:
+  - Include travel_search if the query involves flights, hotels, or a trip.
+  - Include weather if the query asks about weather or packing.
+  - Include rag if the query asks about visas, entry requirements, or advisories.
+  - When in doubt, include all three.
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    agents_needed:
+      type: array
+      items:
+        type: string
+  required:
+    - agents_needed
+
+eval:
+  dataset: tests/eval/cases/orchestrator/plan_dispatch.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-22
+    change: "Initial version — plan node agent dispatch."

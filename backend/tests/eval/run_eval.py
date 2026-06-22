@@ -12,6 +12,7 @@ LLM-judge evals are Phase 5; deterministic checks are cheap and CI-safe.
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -21,7 +22,6 @@ from backend.app.observability.tracing import init_tracing
 
 setup_logging("INFO")
 # Disable tracing in eval runs to conserve LangSmith free-tier quota
-import os
 os.environ["LANGSMITH_TRACING"] = "false"
 init_tracing()
 

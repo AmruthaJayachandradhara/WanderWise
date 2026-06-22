@@ -13,6 +13,7 @@ tools, guardrails, and retries, and streaming partials hides that latency.
 
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -98,8 +99,6 @@ async def chat(request: ChatRequest):
 # --- Serve React static build ---
 # Mounted last so API routes take precedence.
 # frontend/dist is built by the Dockerfile; in dev the React dev server handles /
-import os
-
 _dist = settings.FRONTEND_DIST_DIR
 if os.path.isdir(_dist):
     app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
