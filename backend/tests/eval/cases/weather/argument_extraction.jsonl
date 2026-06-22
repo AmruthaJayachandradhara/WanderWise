@@ -1,0 +1,3 @@
+{"id": "weather-extract-tokyo", "inputs": {}, "human_input": "What is the weather in Tokyo next week?", "description": "Named city — location must be extracted as Tokyo"}
+{"id": "weather-extract-paris", "inputs": {}, "human_input": "Tell me about the weather in Paris this weekend", "description": "Named city — location must be extracted as Paris"}
+{"id": "weather-extract-unknown", "inputs": {}, "human_input": "Will it rain tomorrow?", "description": "No city mentioned — location must be unknown"}

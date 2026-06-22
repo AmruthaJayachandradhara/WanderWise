@@ -1,18 +1,17 @@
 prompt_id: orchestrator/router_intent
-version: 1
+version: 2
 tier: small
 status: active
 description: >
-  Classifies the task type and extracts the destination location from the
-  user's travel query. Returns structured JSON consumed by the router node.
-  Phase 1: weather extraction only. Phase 2+: tier-resolution only (Weather
-  extraction moves to the Weather agent's own prompt).
+  Classifies the task type from the user's travel query. Tier-resolution
+  only — location and argument extraction have moved to each agent's own
+  prompt (agent-symmetry refactor). Returns minimal JSON consumed by the
+  router node.
 
 template: |
-  You are a routing assistant. Extract the destination location from the user's query.
+  You are a routing assistant. Classify the user's query as a travel planning request.
   Respond with valid JSON only — no markdown, no explanation:
-  {{"task_type": "weather", "location": "<city or region name>"}}
-  If you cannot identify a location, use location: "unknown".
+  {{"task_type": "travel_planning"}}
 
 input_variables: []
 
@@ -21,11 +20,8 @@ output_schema:
   properties:
     task_type:
       type: string
-    location:
-      type: string
   required:
     - task_type
-    - location
 
 eval:
   dataset: tests/eval/cases/orchestrator/router_intent.jsonl
@@ -33,6 +29,9 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-06-22
+    change: "Agent-symmetry refactor: location extraction removed. Router now returns task_type only."
   - version: 1
     date: 2026-06-21
     change: "Migrated from inline string in orchestrator/router.py (Phase 1 prompt registry seed)."
