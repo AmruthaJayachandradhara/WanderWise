@@ -1,0 +1,3 @@
+{"id": "rewrite-visa-japan", "inputs": {}, "human_input": "Query: Do I need a visa for Japan?\nDestination ISO: JP\nPassport: US", "description": "Visa query — rewritten query must be non-empty text"}
+{"id": "rewrite-advisory-egypt", "inputs": {}, "human_input": "Query: Is it safe to travel to Egypt?\nDestination ISO: EG\nPassport: GB", "description": "Advisory query — rewritten query must be non-empty text"}
+{"id": "rewrite-generic-france", "inputs": {}, "human_input": "Query: What should I know before visiting France?\nDestination ISO: FR\nPassport: CA", "description": "Generic destination query — rewritten query must be non-empty text"}
