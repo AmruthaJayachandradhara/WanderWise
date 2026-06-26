@@ -1,0 +1,3 @@
+{"id": "ts-extract-tokyo", "inputs": {}, "human_input": "Home airport: SFO\nToday: 2026-06-22\nQuery: Plan a 7-day trip to Tokyo for 2 adults", "description": "Tokyo trip — must extract origin/destination IATA codes and passengers"}
+{"id": "ts-extract-paris-oneway", "inputs": {}, "human_input": "Home airport: JFK\nToday: 2026-06-22\nQuery: I want to fly to Paris next month", "description": "Paris query — destination IATA must be resolved; dates may be null"}
+{"id": "ts-extract-explicit-origin", "inputs": {}, "human_input": "Home airport: LAX\nToday: 2026-06-22\nQuery: Flights from Chicago to London for 3 people", "description": "Explicit departure city overrides home airport; passengers extracted"}
