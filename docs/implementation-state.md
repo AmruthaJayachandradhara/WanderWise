@@ -12,7 +12,7 @@
 | **Live URL** | https://gwuwanderwise-wanderwise.hf.space |
 | **HF Space** | `GwuWanderwise/wanderwise` (Docker SDK, port 7860) |
 | **Language** | Python 3.12 (uv), Node 20 (Vite + React) |
-| **Current phase** | Phase 1 complete |
+| **Current phase** | Phase 2 complete |
 
 ---
 
@@ -213,9 +213,118 @@ Expected per case: `router_tier="small"`, `assemble_tier="large"`, `summary` non
 
 ---
 
-## Phase 2 — Travel Search + RAG (Not Started)
+## Phase 2 — Travel Search + RAG
 
-Per `docs/wanderwise_phase2.md`: Duffel travel search agent, Qdrant RAG agent, active router with real task-type classification and complexity tier selection, parallel tool execution, budget reasoning, Redis session memory.
+**Status: Complete.**
+
+A full travel planning slice: one Japan query flows through memory → plan → parallel (flights ∥ weather ∥ RAG) → budget → assemble, returning a budget-aware itinerary with live flights, hotel options, weather, and a cited visa/advisory answer. All routing visible in LangSmith traces.
+
+---
+
+### Memory
+
+**`backend/app/memory/session.py`** — `load_profile_node`
+Loads the hardcoded demo `UserProfile` into `GraphState` at session start, keyed by `user_id`. Profile is read-only here; all downstream nodes consume these fields directly from state without re-prompting.
+
+**State fields added:** `home_airport`, `passport_country`, `budget_default`, `home_currency`, `interests`, `preferences`.
+
+---
+
+### Tools
+
+**`backend/app/tools/duffel.py`** — extended with flights + stays:
+
+- `DuffelFlightTool`: `DuffelFlightInput(origin, destination, departure_date, return_date, passengers)` → `DuffelFlightOffers(offers: list[FlightOffer])`. Uses `duffel-api` SDK; degrades on any exception.
+- `DuffelStaysTool`: `DuffelStaysInput(destination, check_in, check_out, guests)` → `DuffelStaysOffers(offers: list[HotelOffer])`. SDK 0.6.2 has no stays support — uses raw `httpx POST https://api.duffel.com/stays/search` with Nominatim geocoding. `latency_budget_s = 15.0`.
+
+---
+
+### Agents
+
+**`backend/app/agents/travel_search.py`** — `travel_search_node`
+Extracts IATA codes + dates via `small` tier (`render("travel_search/argument_extraction")`). Calls `DuffelFlightTool` then `DuffelStaysTool`. Deterministic budget pre-filter on hotels (`total_price ≤ budget_default × 0.45`). Returns namespaced degraded flags (`flights_degraded`, `hotels_degraded`).
+
+**`backend/app/agents/weather.py`** — extended
+Extracts its own location via `small` tier (`render("weather/argument_extraction")`) before calling `WeatherTool`. Writes `weather_extraction_tier`.
+
+**`backend/app/agents/rag.py`** — `rag_node`
+Resolves `country_iso` from location via `_LOCATION_TO_ISO` (50-country dict) + substring + small-LLM fallback. Calls `retrieve()`, synthesises a cited answer on `large` tier (`render("rag/synthesis")`), appends the official-sources disclaimer. Returns `rag_results`, `visa_answer`, `rag_degraded`, `rag_tier`.
+
+---
+
+### Orchestrator
+
+**`backend/app/orchestrator/nodes/plan.py`** — `plan_node` (`large`): reads query + profile, returns `agents_needed` (trace metadata only — topology is static); falls back to all three agents.
+
+**`backend/app/orchestrator/nodes/budget.py`** — `budget_node` (`large`): normalises prices to `home_currency` via **Frankfurter** (`api.frankfurter.app`, no key), picks best flight + hotel via `render("orchestrator/budget_allocation")`, builds `BudgetBreakdown`. Returns `budget_breakdown`, `selected_flight`, `selected_hotel`, `budget_tier`.
+
+**`backend/app/orchestrator/nodes/assemble.py`** — extended to v2 (`large`): composes the full itinerary from selected flight, hotel, budget breakdown, weather, and visa/advisory answer; degrades gracefully per section.
+
+**`backend/app/orchestrator/router.py`** — shrunk to tier-resolution only; returns `{"task_type": "travel_planning", "router_tier": "small"}`.
+
+**`backend/app/orchestrator/graph.py`** — Phase 2 topology:
+```
+START → memory → router → plan → [travel_search ∥ weather ∥ rag] → budget → assemble → END
+```
+Fan-out from `plan`; fan-in into `budget` (waits for all three). Parallel writes are safe via per-agent namespaced state keys.
+
+**State fields added:** `flights`/`flights_degraded`, `hotels`/`hotels_degraded`, `weather_extraction_tier`, `agents_needed`/`plan_tier`, `budget_breakdown`/`selected_flight`/`selected_hotel`/`budget_tier`, `rag_results`/`visa_answer`/`rag_tier`/`rag_degraded`.
+
+---
+
+### RAG Pipeline
+
+**`backend/app/rag/collections.py`** — `CollectionConfig` + three collections: `visa_entry` (whole-document), `advisories` (sliding-window 200/10%), `destination_guides` (sliding-window 300/15%).
+
+**`backend/app/rag/embeddings.py`** — fastembed `BAAI/bge-small-en-v1.5` (ONNX, 384-dim, no torch). `embed_texts` + `embed_query`.
+
+**`backend/app/rag/ingest.py`** — `ingest_country(iso, passport)`: fetches `travel.state.gov` + `restcountries.com`, strips HTML (stdlib), chunks per config, embeds, idempotent upsert to Qdrant (dedup by `content_hash`). Metadata on every chunk: `source_url`, `country_iso`, `passport_nationality`, `advisory_level`, `last_verified`, `content_hash`. In-memory Qdrant fallback when `QDRANT_URL` unset.
+
+**`backend/app/rag/retriever.py`** — `retrieve(query, country_iso, passport_nationality) → list[RetrievedChunk]`: query rewrite (`small`) → `embed_query` → metadata pre-filter (`country_iso` + `passport_nationality`) + dense search across all three collections → dedup by `content_hash` → top-5. Public `retrieve()` never raises (returns `[]` on error).
+
+**`scripts/ingest_corpus.py`** — CLI for the 50-country corpus build: `--country JP` or `--all`, optional `--passport`.
+
+---
+
+### API
+
+**`backend/app/main.py`** — SSE `event: done` payload extended with: `flights`, `flights_degraded`, `hotels`, `hotels_degraded`, `visa_answer`, `rag_degraded`, `budget_breakdown`, `selected_flight`, `selected_hotel`.
+
+---
+
+### Prompt Registry — Phase 2 Additions
+
+| File | Tier | Description |
+|---|---|---|
+| `orchestrator/router_intent.yaml` | small | v2 — returns `task_type` only (tier-resolution) |
+| `orchestrator/plan_dispatch.yaml` | large | Decides `agents_needed` |
+| `orchestrator/budget_allocation.yaml` | large | Picks best flight + hotel combo |
+| `orchestrator/assemble_itinerary.yaml` | large | v2 — multi-source itinerary |
+| `weather/argument_extraction.yaml` | small | Location extraction (agent-symmetry) |
+| `travel_search/argument_extraction.yaml` | small | IATA/date/pax extraction |
+| `rag/query_rewrite.yaml` | small | Query expansion before retrieval |
+| `rag/synthesis.yaml` | large | Cited answer from retrieved chunks |
+
+All eight active prompts have paired per-prompt eval cases under `tests/eval/cases/`.
+
+---
+
+### Eval & Tests
+
+23 offline unit tests (monkeypatched LLM + Qdrant): `test_{graph, budget, retriever, rag, session, travel_search}.py`. `dataset.jsonl` extended with `full-trip-tokyo` (expected_fields) and `budget-validity-japan` (budget validity); `run_eval.py` extended with `expected_fields` + `expected_budget_valid` checks.
+
+---
+
+### Phase 2 Exit State
+
+- Topology `memory → router → plan → [travel_search ∥ weather ∥ rag] → budget → assemble` ✅
+- Agent symmetry: every agent extracts its own args; router is tier-resolution only ✅
+- Budget node normalises via Frankfurter, selects best offers ✅
+- RAG: fastembed ONNX, Qdrant metadata pre-filter, dedup, top-5; cited synthesis + disclaimer ✅
+- Assemble v2 composes full itinerary; SSE payload carries all new fields ✅
+- 23/23 unit tests pass; ruff clean; all 8 prompts have eval cases ✅
+
+**Pending (requires live API keys):** `scripts/ingest_corpus.py --all` to populate Qdrant; demo fixture capture (`data/fixtures/README.md`); full-graph eval run (`run_eval.py`).
 
 ---
 
