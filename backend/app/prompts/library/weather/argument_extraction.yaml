@@ -1,0 +1,34 @@
+prompt_id: weather/argument_extraction
+version: 1
+tier: small
+status: active
+description: >
+  Extracts the destination city or region from the user's query for use
+  as the WeatherTool location argument. Used by the weather agent node
+  (agent-symmetry — extraction moved out of the router).
+
+template: |
+  Extract the destination city or region from the user's query.
+  Respond with valid JSON only — no markdown, no explanation:
+  {{"location": "<city or region name>"}}
+  If no location is mentioned, use location: "unknown".
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    location:
+      type: string
+  required:
+    - location
+
+eval:
+  dataset: tests/eval/cases/weather/argument_extraction.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-22
+    change: "Initial version — location extraction moved from router into weather agent."

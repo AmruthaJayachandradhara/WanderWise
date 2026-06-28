@@ -14,6 +14,8 @@ class UserProfile:
     passport_country: str
     interests: list[str]
     preferences: dict[str, str]
+    budget_default: float = 3000.0  # default trip budget; matches the ~$3000 Japan demo
+    home_currency: str = "USD"      # currency the budget is stated in
 
 
 _DEMO_PROFILE = UserProfile(
@@ -22,6 +24,8 @@ _DEMO_PROFILE = UserProfile(
     passport_country="US",
     interests=["food", "history", "nature"],
     preferences={"diet": "vegetarian", "seat": "aisle"},
+    budget_default=3000.0,
+    home_currency="USD",
 )
 
 
