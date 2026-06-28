@@ -1,0 +1,3 @@
+{"id": "plan-full-trip", "inputs": {}, "human_input": "Plan a 7-day trip to Tokyo for 2 adults with a $6000 budget", "description": "Full trip query — agents_needed must be a non-empty list"}
+{"id": "plan-weather-only", "inputs": {}, "human_input": "What is the weather in Paris next week?", "description": "Weather-only query — agents_needed list must be present"}
+{"id": "plan-visa-question", "inputs": {}, "human_input": "Do I need a visa to visit Japan with a US passport?", "description": "Visa query — agents_needed must include rag"}

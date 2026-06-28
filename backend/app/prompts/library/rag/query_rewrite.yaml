@@ -1,0 +1,28 @@
+prompt_id: rag/query_rewrite
+version: 1
+tier: small
+status: active
+description: >
+  Rewrites the user's question into a retrieval-optimised query for the
+  visa/advisory corpus. Expands with passport nationality and destination
+  keywords so hybrid search recalls the right chunks. Used by the retriever
+  before embedding.
+
+template: |
+  You rewrite travel questions into concise search queries for a visa and
+  travel-advisory knowledge base. Include the destination, the passport
+  nationality, and key entry terms (visa, entry requirements, advisory level,
+  stay duration) when relevant.
+  Respond with the rewritten query only — no markdown, no explanation, no quotes.
+
+input_variables: []
+
+eval:
+  dataset: tests/eval/cases/rag/query_rewrite.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-22
+    change: "Initial version — query rewrite before hybrid retrieval (Phase 2, Step 7)."

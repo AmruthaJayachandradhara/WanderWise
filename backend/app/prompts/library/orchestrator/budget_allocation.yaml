@@ -1,0 +1,47 @@
+prompt_id: orchestrator/budget_allocation
+version: 1
+tier: large
+status: active
+description: >
+  Selects the best flight and hotel combination from normalised offers
+  within the user's stated budget. Returns array indices so the budget
+  node can look up the chosen offers directly.
+
+template: |
+  You are a travel budget advisor. Given a list of flights and hotels
+  with prices normalised to the user's home currency, select the best
+  combination that fits within the total budget.
+
+  Rules:
+  - Prefer lower cost while maintaining reasonable quality.
+  - Do not exceed the total budget when flight + hotel + activities (15%) are summed.
+  - If no combination fits, pick the cheapest available.
+
+  Respond with valid JSON only — no markdown, no explanation:
+  {{"selected_flight_idx": 0, "selected_hotel_idx": 0, "reasoning": "<one sentence>"}}
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    selected_flight_idx:
+      type: integer
+    selected_hotel_idx:
+      type: integer
+    reasoning:
+      type: string
+  required:
+    - selected_flight_idx
+    - selected_hotel_idx
+    - reasoning
+
+eval:
+  dataset: tests/eval/cases/orchestrator/budget_allocation.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-22
+    change: "Initial version — LLM-based offer selection with Frankfurter-normalised prices."

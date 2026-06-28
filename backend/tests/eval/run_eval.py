@@ -12,6 +12,7 @@ LLM-judge evals are Phase 5; deterministic checks are cheap and CI-safe.
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -21,7 +22,6 @@ from backend.app.observability.tracing import init_tracing
 
 setup_logging("INFO")
 # Disable tracing in eval runs to conserve LangSmith free-tier quota
-import os
 os.environ["LANGSMITH_TRACING"] = "false"
 init_tracing()
 
@@ -80,7 +80,36 @@ def run_eval() -> int:
             logger.error("FAIL [%s]: summary is empty", case_id)
             failures += 1
 
-        if not (got_router != exp_router or got_assemble != exp_assemble or not summary.strip()):
+        # Check expected_fields (Phase 2: new fields must be non-null)
+        case_failures_before = failures
+        for field_name in case.get("expected_fields", []):
+            if result.get(field_name) is None:
+                logger.error("FAIL [%s]: expected field %r is missing/null", case_id, field_name)
+                failures += 1
+
+        # Check budget validity if requested (Phase 2: deterministic, no LLM)
+        if case.get("expected_budget_valid"):
+            bd = result.get("budget_breakdown")
+            if bd is not None:
+                flight_cost = bd.get("selected_flight_cost") or 0
+                hotel_cost = bd.get("selected_hotel_cost") or 0
+                activities = bd.get("estimated_activities") or 0
+                total_cost = flight_cost + hotel_cost + activities
+                budget = bd.get("total_budget", float("inf"))
+                if total_cost > budget:
+                    logger.error(
+                        "FAIL [%s]: budget exceeded — total_cost=%.0f > budget=%.0f",
+                        case_id, total_cost, budget,
+                    )
+                    failures += 1
+
+        any_fail = (
+            got_router != exp_router
+            or got_assemble != exp_assemble
+            or not summary.strip()
+            or failures > case_failures_before
+        )
+        if not any_fail:
             logger.info(
                 "PASS [%s]: router=%s assemble=%s summary_len=%d",
                 case_id, got_router, got_assemble, len(summary),

@@ -1,18 +1,38 @@
 prompt_id: orchestrator/assemble_itinerary
-version: 1
+version: 2
 tier: large
 status: active
 description: >
-  Synthesises a short natural-language weather summary from structured
-  forecast data. Handles the degraded/unavailable case honestly. Used by
+  Synthesises a full natural-language travel itinerary from all parallel-agent
+  results: selected flight, hotel, weather forecast, visa/advisory answer, and
+  budget breakdown. Handles degraded/unavailable components honestly. Used by
   the assemble node as the final synthesis step (large tier).
 
 template: |
-  You are a helpful travel assistant. Given weather forecast data, write a short,
-  friendly summary (3–5 sentences) that tells the traveller what to expect.
-  Mention temperature range, any rain, and the general outlook. Be concise.
-  If the forecast data is unavailable, say so honestly and suggest the user
-  check a weather service before travelling.
+  You are a friendly, knowledgeable travel assistant composing a personalised
+  trip summary for a traveller.
+
+  You will receive structured data for:
+  - Destination
+  - Weather forecast
+  - Selected flight (or unavailability notice)
+  - Selected hotel (or unavailability notice)
+  - Budget summary
+  - Visa and travel advisory information
+
+  Write a concise, well-organised itinerary overview (4–8 sentences or short
+  paragraphs) that covers:
+  1. A brief trip intro (destination + vibe)
+  2. Flight logistics (carrier, times, cost)
+  3. Accommodation (hotel name, cost, highlights)
+  4. Weather outlook and what to pack
+  5. Budget snapshot (total, remaining, affordability)
+  6. Key visa or travel advisory note (cite the source if provided)
+
+  Tone: warm, practical, and confident. Avoid filler phrases like "of course"
+  or "certainly". If any data is unavailable, acknowledge it briefly and suggest
+  the traveller verify before booking. Do NOT invent prices, airline names, or
+  hotel details.
 
 input_variables: []
 
@@ -22,6 +42,9 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-06-22
+    change: "Phase 2 multi-source template: composes flight, hotel, weather, budget, and visa/advisory into a full itinerary."
   - version: 1
     date: 2026-06-21
     change: "Migrated from inline string in orchestrator/nodes/assemble.py (Phase 1 prompt registry seed)."
