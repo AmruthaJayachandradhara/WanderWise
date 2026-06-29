@@ -8,11 +8,14 @@ Single-subject scope: one passport, one destination. Multi-passport
 decomposition is Phase 4.
 """
 
+import hashlib
+import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 from backend.app.rag.retriever import retrieve
@@ -101,6 +104,21 @@ def rag_node(state: GraphState) -> dict:
     country_iso = _resolve_country_iso(location, query)
     logger.info("RAG: resolved country_iso=%s passport=%s", country_iso, passport)
 
+    # API cache check — visa docs change slowly (TTL 24h), keyed by data version
+    _qhash = hashlib.sha256(query.encode()).hexdigest()[:12]
+    _cache_key = f"rag:v1:{country_iso}:{passport}:{_qhash}"
+    cached = api_get(_cache_key)
+    if cached:
+        logger.info("RAG: cache HIT for %s/%s", country_iso, passport)
+        cached_data = json.loads(cached)
+        return {
+            "rag_results": cached_data["rag_results"],
+            "visa_answer": cached_data["visa_answer"],
+            "rag_degraded": False,
+            "rag_tier": _SYNTHESIS_TIER,
+            "cache_source": "api",
+        }
+
     chunks = retrieve(query, country_iso, passport)
 
     if not chunks:
@@ -140,6 +158,12 @@ def rag_node(state: GraphState) -> dict:
     ]
 
     logger.info("RAG: synthesised answer from %d chunks", len(chunks))
+    from backend.app.config import settings
+    api_set(
+        _cache_key,
+        json.dumps({"rag_results": rag_results, "visa_answer": visa_answer}),
+        ttl=settings.CACHE_TTL_VISA_DOCS,
+    )
     return {
         "rag_results": rag_results,
         "visa_answer": visa_answer,

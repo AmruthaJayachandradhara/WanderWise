@@ -22,6 +22,9 @@ COPY pyproject.toml uv.lock README.md ./
 # Install production dependencies (no dev extras)
 RUN uv sync --no-dev --frozen
 
+# Download the spaCy model required by Presidio's NER recogniser
+RUN uv run python -m spacy download en_core_web_lg
+
 # Copy backend source
 COPY backend/ ./backend/
 

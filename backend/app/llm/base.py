@@ -15,6 +15,9 @@ class LLMResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     latency_ms: float
+    # Set when infra retry/fallback was triggered (Phase 3)
+    degraded: bool = False
+    fallback_used: str | None = None
 
 
 @runtime_checkable

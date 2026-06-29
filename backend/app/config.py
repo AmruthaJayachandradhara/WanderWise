@@ -55,6 +55,23 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.0
     LLM_TIMEOUT_S: int = 30
 
+    # --- Infra Retry + Circuit Breaker (Phase 3) ---
+    LLM_RETRY_ATTEMPTS: int = 3
+    LLM_RETRY_BASE_DELAY: float = 1.0       # seconds; doubles each attempt (1→2→4)
+    LLM_CIRCUIT_FAILURE_THRESHOLD: int = 5  # consecutive failures before OPEN
+    LLM_CIRCUIT_COOLDOWN_S: float = 60.0    # seconds in OPEN before HALF_OPEN probe
+
+    # --- Guardrail Thresholds (Phase 3) ---
+    GUARDRAIL_TOPICALITY_THRESHOLD: float = 0.95
+    GUARDRAIL_GROUNDING_THRESHOLD: float = 0.80  # min faithfulness score before retry
+    GUARDRAIL_MAX_REFLECTION_ATTEMPTS: int = 2
+
+    # --- Cache TTLs in seconds (Phase 3) ---
+    CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly
+    CACHE_TTL_WEATHER: int = 3600        # 1h — forecast is reasonably fresh
+    CACHE_TTL_FLIGHTS: int = 0           # 0 = never cache prices
+    CACHE_SEMANTIC_SIMILARITY_THRESHOLD: float = 0.92
+
     # --- App & Deployment ---
     LOG_LEVEL: str = "INFO"
     APP_PORT: int = 7860  # HF Spaces Docker default
