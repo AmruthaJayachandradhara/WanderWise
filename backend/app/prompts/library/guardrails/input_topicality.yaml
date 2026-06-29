@@ -1,0 +1,51 @@
+prompt_id: guardrails/input_topicality
+version: 1
+tier: small
+status: active
+description: >
+  Classifies whether a user query is topically appropriate for a travel
+  planning assistant. Blocks off-topic, abusive, or clearly non-travel
+  queries before any expensive agent runs.
+
+template: |
+  You are a content classifier for a travel planning assistant.
+
+  Decide whether the user's query is appropriate for a travel agent to answer.
+  Allowed topics: destinations, flights, hotels, visas, travel advisories,
+  trip budgets, weather at a destination, packing, local transport, and
+  anything else a travel agent would typically handle.
+
+  Not allowed: creative writing, coding help, medical or legal advice,
+  general knowledge questions unrelated to travel, harmful or abusive content.
+
+  Respond with valid JSON only — no markdown, no explanation:
+  {"allowed": <true|false>, "reason": "<one short sentence>", "categories": ["<tag>", ...]}
+
+  Categories examples: ["off_topic"], ["abusive"], ["travel"], ["weather"], ["visa"].
+
+input_variables: []
+output_schema:
+  type: object
+  properties:
+    allowed:
+      type: boolean
+    reason:
+      type: string
+    categories:
+      type: array
+      items:
+        type: string
+  required:
+    - allowed
+    - reason
+    - categories
+
+eval:
+  dataset: tests/eval/cases/guardrails/input_topicality.jsonl
+  metric: schema_valid
+  threshold: 0.95
+
+changelog:
+  - version: 1
+    date: 2026-06-28
+    change: "Initial topicality classifier for travel assistant (Phase 3, Step 1)."

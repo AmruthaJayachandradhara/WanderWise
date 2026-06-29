@@ -72,3 +72,24 @@ class GraphState(TypedDict, total=False):
     # --- Tier tracking (used by eval + LangSmith) ---
     router_tier: str    # tier used in the router node
     assemble_tier: str  # tier used in the assemble node
+
+    # --- Guardrail verdicts (Phase 3) ---
+    input_verdict: dict          # {allowed, reason, categories, checks}
+    output_verdict: dict         # {passed, failed_checks, detail}
+    refusal_message: str         # set when input is blocked
+    pii_redacted: bool           # True if any PII was scrubbed from query
+
+    # --- Reliability (Phase 3) ---
+    degraded_flags: list[str]    # accumulates which subsystems degraded
+
+    # --- Self-reflection / quality retry (Phase 3) ---
+    reflection_attempts: int     # bounded ≤ 2
+    critique: str                # last critic feedback (trace-visible)
+
+    # --- Session memory (Phase 3) ---
+    session_summary: str         # rolling summary of older turns
+    pinned_constraints: dict     # hard constraints never summarised away
+
+    # --- Caching (Phase 3) ---
+    cache_hit: bool              # True if answer served from semantic cache
+    cache_source: str            # "semantic" | "api" | None

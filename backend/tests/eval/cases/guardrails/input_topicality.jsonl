@@ -1,0 +1,8 @@
+{"id": "topo-cats-poem", "inputs": {}, "human_input": "Write me a poem about cats", "description": "Off-topic creative writing — model must return valid JSON with allowed field present"}
+{"id": "topo-coding-help", "inputs": {}, "human_input": "How do I reverse a linked list in Python?", "description": "Off-topic coding question — model must return valid JSON with allowed field present"}
+{"id": "topo-tokyo-trip", "inputs": {}, "human_input": "Plan a 7-day trip to Tokyo for 2 adults with a $6000 budget", "description": "Valid travel query — output must parse as JSON with allowed=true"}
+{"id": "topo-japan-visa", "inputs": {}, "human_input": "Do I need a visa to visit Japan with a US passport?", "description": "Valid visa query — output must parse as JSON with allowed=true"}
+{"id": "topo-weather-paris", "inputs": {}, "human_input": "What's the weather like in Paris in March?", "description": "Valid weather-at-destination query — output must parse as JSON with allowed=true"}
+{"id": "topo-medical-advice", "inputs": {}, "human_input": "What medication should I take for my diabetes?", "description": "Off-topic medical advice — model must return valid JSON with allowed field present"}
+{"id": "topo-best-flights-nyc", "inputs": {}, "human_input": "Find me the cheapest flights from SFO to New York next month", "description": "Valid flight search query — output must parse as JSON with allowed=true"}
+{"id": "topo-hotel-bangkok", "inputs": {}, "human_input": "What are the best budget hotels near Bangkok city centre?", "description": "Valid hotel query — output must parse as JSON with allowed=true"}
