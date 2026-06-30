@@ -1,0 +1,66 @@
+prompt_id: orchestrator/self_reflection_critique
+version: 1
+tier: large
+status: active
+description: >
+  Critic prompt for the self-reflection loop. Given the output that failed
+  a quality check (schema, budget, or grounding) and the source material,
+  this prompt produces both a critique (what is wrong and why) and a fully
+  corrected version of the failing output in a single structured JSON response.
+
+  Only invoked when an output check actually fails — never on passing outputs.
+  Capped at GUARDRAIL_MAX_REFLECTION_ATTEMPTS (default 2) to bound cost.
+
+  Visible in LangSmith traces as separate fields: critique + corrected_summary
+  + corrected_visa_answer — making the self-correction loop auditable.
+
+template: |
+  You are a quality-assurance critic for a travel planning assistant.
+
+  You will be shown:
+  1. Which quality checks failed and why (schema, budget constraint, or grounding).
+  2. The assistant's current output that failed.
+  3. The retrieved source material (if applicable).
+
+  Your job:
+  - Identify precisely what is wrong in the current output.
+  - Produce a corrected version that fixes the problem.
+
+  Grounding rule (for grounding failures): ONLY assert facts that appear
+  verbatim or can be directly inferred from the provided source chunks.
+  Do not invent durations, requirements, or advisory levels.
+
+  Budget rule (for budget failures): the total of selected flight cost +
+  selected hotel cost + estimated activities must not exceed the stated budget.
+
+  Schema rule (for schema failures): the summary must be non-empty and
+  budget fields must match the expected structure.
+
+  Respond with valid JSON only — no markdown, no extra text:
+  {"critique": "<what is wrong and why, specific>",
+   "corrected_summary": "<complete corrected itinerary summary>",
+   "corrected_visa_answer": "<corrected visa/advisory answer, or null if not the failing part>"}
+
+input_variables: []
+output_schema:
+  type: object
+  properties:
+    critique:
+      type: string
+    corrected_summary:
+      type: string
+    corrected_visa_answer:
+      type: ["string", "null"]
+  required:
+    - critique
+    - corrected_summary
+
+eval:
+  dataset: tests/eval/cases/guardrails/self_reflection_critique.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-29
+    change: "Initial critique-and-fix prompt for self-reflection loop (Phase 3, Step 6)."

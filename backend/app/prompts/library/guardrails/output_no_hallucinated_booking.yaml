@@ -1,0 +1,68 @@
+prompt_id: guardrails/output_no_hallucinated_booking
+version: 1
+tier: large
+status: active
+description: >
+  Structural rule prompt for the no-hallucinated-booking guardrail.
+
+  Rule: only the Booking/Action agent may assert a confirmed reservation,
+  and only after a confirmation_id has been issued by the reservation service.
+  The generator model is structurally prevented from claiming a booking.
+
+  This prompt is DESIGNED in Phase 3 and ENFORCED in Phase 4 when the
+  Booking/Action agent and reservation service exist. The eval cases for
+  this prompt are added in Phase 4.
+
+  Structural rule (encoded here for Phase 4 enforcement):
+    IF summary contains booking confirmation claims
+    AND confirmation_id is absent from state
+    THEN the output is invalid — flag as hallucinated booking.
+
+template: |
+  You are a booking-integrity judge for a travel planning assistant.
+
+  The assistant is NOT allowed to claim that a flight, hotel, or activity
+  has been booked or confirmed unless the Booking Agent has returned a
+  confirmation_id. The generator model has no access to the booking system
+  and must never assert that a reservation is confirmed.
+
+  Given the assistant's output and the confirmation status below, determine
+  whether the output makes an unsupported booking claim.
+
+  Booking confirmation status: {confirmation_status}
+
+  Assistant output:
+  {assistant_output}
+
+  Respond with valid JSON only:
+  {"booking_claimed": <true|false>, "hallucinated": <true|false>, "reason": "<one sentence>"}
+
+  hallucinated=true only when booking_claimed=true AND confirmation_status is "none".
+
+input_variables:
+  - confirmation_status
+  - assistant_output
+
+output_schema:
+  type: object
+  properties:
+    booking_claimed:
+      type: boolean
+    hallucinated:
+      type: boolean
+    reason:
+      type: string
+  required:
+    - booking_claimed
+    - hallucinated
+    - reason
+
+eval:
+  dataset: tests/eval/cases/guardrails/output_no_hallucinated_booking.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-06-29
+    change: "Structural seam designed Phase 3 Step 5. Enforcement and eval cases wired Phase 4."
