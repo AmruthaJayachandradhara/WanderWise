@@ -88,6 +88,18 @@ def assemble_node(state: GraphState) -> dict:
     else:
         visa_section = "No visa information requested."
 
+    # Prior session context — inject pinned constraints + summary if present
+    prior_section = ""
+    pinned = state.get("pinned_constraints") or {}
+    session_summary = state.get("session_summary") or ""
+    if pinned or session_summary:
+        parts = []
+        if pinned:
+            parts.append(f"User constraints (always honour these): {json.dumps(pinned)}")
+        if session_summary:
+            parts.append(f"Previous conversation summary: {session_summary}")
+        prior_section = "\nPrior context:\n" + "\n".join(parts)
+
     full_context = (
         f"Destination: {location}\n"
         f"Weather: {weather_section}\n"
@@ -95,6 +107,7 @@ def assemble_node(state: GraphState) -> dict:
         f"Hotel: {hotel_section}\n"
         f"Budget: {budget_section}\n"
         f"Visa/Advisory: {visa_section}"
+        f"{prior_section}"
     )
 
     p = get_prompt(_PROMPT_ID)

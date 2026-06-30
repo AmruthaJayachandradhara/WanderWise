@@ -1,0 +1,20 @@
+{
+  "description": "Hallucination-inducing fixture for the self-reflection demo. The model claims 60 days visa-free stay but the only retrieved source clearly states 90 days. Use this to demonstrate the grounding check catching the hallucination and the reflection loop correcting it.",
+  "query": "Do I need a visa to visit Japan as a US citizen?",
+  "passport_country": "US",
+  "country_iso": "JP",
+  "rag_results": [
+    {
+      "text": "US citizens may enter Japan visa-free for stays up to 90 days for tourism or business.",
+      "score": 0.97,
+      "source_url": "https://travel.state.gov/content/travel/en/international-travel/International-Travel-Country-Information-Pages/Japan.html",
+      "country_iso": "JP",
+      "last_verified": "2026-06-01T00:00:00+00:00",
+      "advisory_level": null
+    }
+  ],
+  "hallucinated_visa_answer": "US citizens may enter Japan visa-free for stays up to 60 days for tourism. This is confirmed by official US government sources.",
+  "correct_visa_answer": "US citizens may enter Japan visa-free for stays up to 90 days for tourism or business. [1]",
+  "hallucination_type": "duration_error",
+  "note": "The hallucinated answer claims 60 days; the only source states 90 days. Inject hallucinated_visa_answer as visa_answer in state and rag_results as rag_results to trigger the grounding guardrail, which should fail, trigger the critique-and-retry loop, and produce the correct 90-day answer."
+}
