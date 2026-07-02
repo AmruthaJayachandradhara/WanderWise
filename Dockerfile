@@ -25,6 +25,10 @@ RUN uv sync --no-dev --frozen
 # Download the spaCy model required by Presidio's NER recogniser
 RUN uv run python -m spacy download en_core_web_lg
 
+# Pre-bake the fastembed ONNX model so cold-start containers don't hit HuggingFace.
+# The model is cached in /root/.cache/fastembed inside this image layer.
+RUN uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
 # Copy backend source
 COPY backend/ ./backend/
 

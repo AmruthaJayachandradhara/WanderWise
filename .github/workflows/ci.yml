@@ -25,11 +25,30 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
-      # presidio-analyzer lazy-downloads en_core_web_lg on first use via pip,
-      # but pip is not available in uv-managed venvs. Pre-install explicitly
-      # the same way the Dockerfile does it.
+      # uv-managed venvs omit pip by design. Some packages (spaCy's downloader,
+      # potential future presidio plugins) shell out to pip at runtime.
+      # Injecting pip once here fixes the class of problem for all future phases.
+      - name: Inject pip into venv
+        run: uv pip install pip
+
+      # Restore cached fastembed ONNX model files to avoid re-downloading
+      # ~80 MB from HuggingFace on every CI run.
+      # Cache is keyed on pyproject.toml so a dependency bump invalidates it.
+      - name: Cache fastembed model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-${{ hashFiles('pyproject.toml') }}
+
+      # Pre-install the spaCy model into the venv (same as Dockerfile).
+      # pip is now available (step above), so this succeeds even on a cache miss.
       - name: Install spaCy model
         run: uv run python -m spacy download en_core_web_lg
+
+      # Warm up the fastembed model on a cache miss so it's ready before tests.
+      # On a cache hit this is instant (model files already present).
+      - name: Warm up fastembed model
+        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
       - name: Lint (ruff)
         run: uv run ruff check backend/

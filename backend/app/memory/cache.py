@@ -58,7 +58,7 @@ def _embed(text: str) -> list[float] | None:
         from fastembed import TextEmbedding
 
         if _embedding_model is None:
-            _embedding_model = TextEmbedding()
+            _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5")
         vecs = list(_embedding_model.embed([text]))
         return vecs[0].tolist() if vecs else None
     except Exception as exc:
