@@ -44,6 +44,21 @@ def is_retryable(exc: Exception) -> bool:
     return any(tok in msg for tok in ("timeout", "rate limit", "429", "503", "502", "service unavailable"))
 
 
+def is_rate_limit(exc: Exception) -> bool:
+    """Return True when exc is specifically a 429 quota / rate-limit error.
+
+    Used by LLMClient to skip recording a circuit-breaker failure: a 429
+    means "slow down", not "provider is down". Tripping the circuit on quota
+    exhaustion blocks ALL subsequent calls for the entire cooldown window,
+    turning a recoverable quota spike into a full eval cascade failure.
+    """
+    exc_type = type(exc).__name__
+    if exc_type == "APIStatusError":
+        return getattr(exc, "status_code", None) == 429
+    msg = str(exc).lower()
+    return "429" in msg or "rate limit" in msg or "quota" in msg or "resource_exhausted" in msg
+
+
 def with_retry(
     fn: Callable[[], T],
     *,

@@ -26,7 +26,7 @@ from backend.app.llm.base import LLMProvider, LLMResponse
 from backend.app.observability.tracing import trace_metadata
 from backend.app.reliability.circuit import CircuitBreaker
 from backend.app.reliability.fallback import try_fallback
-from backend.app.reliability.retry import with_retry
+from backend.app.reliability.retry import is_rate_limit, with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +102,25 @@ class LLMClient:
             )
             self._circuit.record_success()
         except Exception as exc:
-            self._circuit.record_failure()
-            logger.warning(
-                "LLM call failed after %d retries (tier=%s): %s — trying fallback",
-                settings.LLM_RETRY_ATTEMPTS,
-                tier,
-                exc,
-            )
+            # 429 quota exhaustion means "slow down", not "provider down".
+            # Do NOT trip the circuit — that would block all calls for the
+            # entire cooldown window, cascading one quota spike into a total
+            # eval outage. Only 5xx (real provider failures) open the circuit.
+            if is_rate_limit(exc):
+                logger.warning(
+                    "LLM call rate-limited after %d retries (tier=%s) — "
+                    "trying fallback (circuit stays closed)",
+                    settings.LLM_RETRY_ATTEMPTS,
+                    tier,
+                )
+            else:
+                self._circuit.record_failure()
+                logger.warning(
+                    "LLM call failed after %d retries (tier=%s): %s — trying fallback",
+                    settings.LLM_RETRY_ATTEMPTS,
+                    tier,
+                    exc,
+                )
             degraded_flags.append(f"retry_exhausted:{type(exc).__name__}")
             return try_fallback(
                 primary_provider=self._provider,

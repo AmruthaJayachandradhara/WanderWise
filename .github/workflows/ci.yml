@@ -41,6 +41,11 @@ jobs:
           TRACE_SAMPLING: "0"
         run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_intent
 
+      # Give Gemini free-tier quota (10 RPM) time to recover after the
+      # per-prompt eval calls before hitting the graph eval.
+      - name: Rate-limit cooldown
+        run: sleep 30
+
       # 3-case smoke eval: happy-path trip, injection block (regex — no LLM
       # quota), and false-block prevention. All three pass even on 429 because
       # the graph degrades gracefully to a non-empty stub response.

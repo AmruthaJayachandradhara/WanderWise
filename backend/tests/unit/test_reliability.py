@@ -7,7 +7,7 @@ Follows the same monkeypatch-everything pattern as test_budget.py.
 import pytest
 
 from backend.app.reliability.circuit import CLOSED, HALF_OPEN, OPEN, CircuitBreaker
-from backend.app.reliability.retry import is_retryable, with_retry
+from backend.app.reliability.retry import is_rate_limit, is_retryable, with_retry
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +90,27 @@ def test_is_not_retryable_400():
 
 def test_is_not_retryable_value_error():
     assert not is_retryable(ValueError("parse error"))
+
+
+def test_is_rate_limit_429_status_error():
+    exc = _StatusError(429)
+    assert is_rate_limit(exc)
+
+
+def test_is_rate_limit_500_is_not_rate_limit():
+    exc = _StatusError(500)
+    assert not is_rate_limit(exc)
+
+
+def test_is_rate_limit_message_match():
+    assert is_rate_limit(Exception("quota exceeded"))
+    assert is_rate_limit(Exception("RESOURCE_EXHAUSTED"))
+    assert is_rate_limit(Exception("HTTP 429 too many requests"))
+
+
+def test_is_rate_limit_unrelated_error():
+    assert not is_rate_limit(ValueError("parse error"))
+    assert not is_rate_limit(Exception("connection refused"))
 
 
 # ---------------------------------------------------------------------------

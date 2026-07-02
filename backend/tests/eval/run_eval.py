@@ -75,7 +75,9 @@ def run_eval() -> int:
 
     for i, case in enumerate(cases):
         if i > 0:
-            time.sleep(5)
+            # 30s cooldown between graph-eval cases so Gemini free-tier quota
+            # (10 RPM) can partially recover before the next burst of calls.
+            time.sleep(30)
         case_id = case["id"]
         logger.info("--- Case: %s ---", case_id)
 
