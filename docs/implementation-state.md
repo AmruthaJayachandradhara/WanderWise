@@ -12,7 +12,7 @@
 | **Live URL** | https://gwuwanderwise-wanderwise.hf.space |
 | **HF Space** | `GwuWanderwise/wanderwise` (Docker SDK, port 7860) |
 | **Language** | Python 3.12 (uv), Node 20 (Vite + React) |
-| **Current phase** | Phase 2 complete |
+| **Current phase** | Phase 3 complete |
 
 ---
 
@@ -328,6 +328,269 @@ All eight active prompts have paired per-prompt eval cases under `tests/eval/cas
 
 ---
 
+## Phase 3 — Guardrails, Reliability & Advanced Memory
+
+**Status: Complete.**
+
+WanderWise is now production-shaped. A red-team input is blocked before any agent runs, an induced hallucination is caught and corrected by a self-reflection loop, stated preferences persist across sessions, and a repeated query hits the semantic cache. None of these change *what* the system does — they govern how it behaves at the edges.
+
+---
+
+### Graph Topology — Phase 3
+
+```
+START → memory → input_guardrail → (refuse → refusal → END)
+                                 → cache_lookup → (hit → output_guardrail)
+                                               → (miss → router → plan)
+                                                                → [travel_search ∥ weather ∥ rag]
+                                                                → budget → assemble
+                                                                         → output_guardrail
+                                                                         → (ok → session_update → END)
+                                                                         → (reflect ≤2 → reflection → output_guardrail)
+```
+
+Three new first-class elements vs Phase 2:
+- **`input_guardrail`** — first node after `memory`; all input checks run here; blocked queries short-circuit to `refusal` via conditional edge, never reaching any expensive agent.
+- **`cache_lookup`** — between `input_guardrail` and `router`; semantic cache hit skips the entire pipeline but still routes through `output_guardrail`.
+- **`output_guardrail` + `reflection` cycle** — after `assemble`; failed checks trigger `reflection` (critique-and-fix, large tier); capped at `GUARDRAIL_MAX_REFLECTION_ATTEMPTS = 2`.
+- **`session_update`** — terminal node on the `ok` path; persists the completed turn to rolling summary, long-term SQLite store, and semantic cache.
+
+Total nodes: **14** (was 8).
+
+---
+
+### State Schema — Phase 3 Additions
+
+Fields appended to `GraphState` in `backend/app/orchestrator/state.py`:
+
+| Field | Set by | Description |
+|---|---|---|
+| `input_verdict` | `input_guardrail` | `{allowed, reason, categories, checks}` — verdict for every input check that ran |
+| `output_verdict` | `output_guardrail` | `{passed, failed_checks, detail}` — verdict from all output checks |
+| `refusal_message` | `input_guardrail` | Polite refusal text surfaced to the user when input is blocked |
+| `pii_redacted` | `input_guardrail` | `True` if any PII was scrubbed from the query |
+| `degraded_flags` | reliability layer | Accumulates which subsystems degraded (fallback, circuit, reflection parse) |
+| `reflection_attempts` | `reflection` | Incremented each retry; `route_output` enforces the cap |
+| `critique` | `reflection` | Last critic feedback, trace-visible |
+| `session_summary` | `memory` | Rolling summary of older turns injected at session start |
+| `pinned_constraints` | `memory` | Hard constraints never compressed (budget, diet, passport) |
+| `cache_hit` | `cache_lookup` | `True` when answer served from semantic cache |
+| `cache_source` | agents / `cache_lookup` | `"semantic"` or `"api"` |
+
+`query` is overwritten with the PII-redacted version so all downstream nodes and LangSmith traces see scrubbed text.
+
+---
+
+### Guardrails
+
+**`backend/app/guardrails/input.py`** — `input_guardrail_node`, `refusal_node`, `route_input`
+
+Check order (cheap-first, all run in one node):
+1. **PII redaction** — Presidio `AnalyzerEngine` + `AnonymizerEngine` (lazy-loaded, degrade-safe); redacts query *before* any LLM call and *before* state is written so LangSmith traces see scrubbed text.
+2. **Injection / jailbreak** — 16 regex heuristics (`_INJECTION_PATTERNS`) covering ignore/disregard, exfiltration, role-override, DAN, jailbreak, bypass, developer mode. Clear attacks blocked without any LLM call. Ambiguous cases escalate to a `small`-tier classifier (`render("guardrails/input_injection")`).
+3. **Topicality** — `small`-tier classifier (`render("guardrails/input_topicality")`); cheap heuristic (empty / > 5000 chars) short-circuits before the LLM. Both checks fail-open on parse error to avoid over-blocking.
+
+`route_input(state) → "refuse" | "ok"` is the conditional edge function.
+
+**`backend/app/guardrails/pii.py`** — `redact(text) → (str, bool)`
+
+Wraps Presidio. Lazily initialises on first call (spaCy `en_core_web_lg` model, ~2s). On any failure returns the original text and logs a warning — never raises. Deployed via `Dockerfile`: `uv run python -m spacy download en_core_web_lg` after `uv sync`.
+
+**`backend/app/guardrails/output.py`** — `output_guardrail_node`, `route_output`
+
+Check order (cheap deterministic first, expensive LLM-judge only after deterministic pass):
+1. **Schema** — `BudgetBreakdown` Pydantic validation + non-empty summary; malformed → fail.
+2. **Budget** — `flight_cost + hotel_cost + estimated_activities ≤ total_budget`; exact same arithmetic as `run_eval.py` budget check — reuses the same logic.
+3. **Grounding / faithfulness** — `large`-tier LLM judge (`render("guardrails/output_grounding")`); RAG-derived claims must be supported by `rag_results`; only runs when both `visa_answer` and `rag_results` are present. False-block rate tracked as a metric from day one.
+4. **No-hallucinated-booking seam** — structural rule: only a Booking/Action agent may assert a reservation (via `confirmation_id`); **design only in Phase 3, enforcement deferred to Phase 4**.
+
+`route_output(state) → "ok" | "reflect"` enforces the reflection cap: once `reflection_attempts ≥ GUARDRAIL_MAX_REFLECTION_ATTEMPTS`, returns `"ok"` to degrade gracefully.
+
+---
+
+### Reliability
+
+**`backend/app/reliability/retry.py`** — `with_retry(fn, attempts, base_delay)`
+
+Exponential backoff + jitter: 1 → 2 → 4s (base_delay × 2^attempt + U(0, 0.5s)). Retries only on transport errors (timeout, 429, 5xx) detected by `is_retryable(exc)`. Non-retryable errors propagate immediately — no unnecessary delay. Hand-rolled (no tenacity) to keep the logic inspectable.
+
+**`backend/app/reliability/circuit.py`** — `CircuitBreaker`
+
+In-process, thread-safe (threading.Lock). States: `CLOSED` → `OPEN` (after N consecutive failures) → `HALF_OPEN` (probe after cooldown) → `CLOSED` (on success). Thresholds: `LLM_CIRCUIT_FAILURE_THRESHOLD=5`, `LLM_CIRCUIT_COOLDOWN_S=60`. Keyed distinction: *infra retry* answers "the API was down"; the *self-reflection loop* answers "the API responded but the answer was wrong" — these are separate mechanisms by design.
+
+**`backend/app/reliability/fallback.py`** — `try_fallback(...)`
+
+Called when all retries are exhausted. Strategy (in order):
+1. Tier demotion on primary provider: `large → small` (Flash → Flash-Lite).
+2. Groq provider at the same tier, if `GROQ_API_KEY` is set.
+3. Minimal degraded stub: `"[Service temporarily unavailable.]"`.
+Each step appends to `degraded_flags` and sets `LLMResponse.degraded=True` / `.fallback_used`.
+
+**`backend/app/llm/client.py`** — extended
+
+`LLMClient.complete()` now: (1) checks `CircuitBreaker.allow_request()` — fast-fails to `try_fallback` if open; (2) wraps `provider.complete()` in `with_retry`; (3) on exhaustion calls `try_fallback`; (4) records success/failure on the breaker. Callers (`llm.complete(tier, messages)`) are unchanged.
+
+**`backend/app/llm/base.py`** — `LLMResponse` extended
+
+Two new optional fields: `degraded: bool = False`, `fallback_used: str | None = None`. Backward-compatible (both have defaults).
+
+---
+
+### Self-Reflection Subgraph
+
+**`backend/app/orchestrator/nodes/reflection.py`** — `reflection_node`
+
+On a failed `output_guardrail` the reflection node:
+1. Reads `output_verdict` (`failed_checks`, `detail`) to understand what failed.
+2. Calls the large-tier critique-and-fix prompt (`render("orchestrator/self_reflection_critique")`), passing the current output and retrieved sources (so grounding corrections stay sourced).
+3. Returns one structured JSON response: `{critique, corrected_summary, corrected_visa_answer}` — one LLM call per attempt, not two.
+4. Writes `critique`, corrected `summary` / `visa_answer`, and incremented `reflection_attempts` back to state.
+
+The graph cycle `output_guardrail → reflection → output_guardrail` lets LangGraph re-validate the corrected output. `route_output` enforces the cap: at `reflection_attempts ≥ 2`, it returns `"ok"` and degrades gracefully (appends `reflection_parse_error` to `degraded_flags`). The failed verdict, critique, and corrected output are all visible as separate state fields in the LangSmith trace.
+
+**Hallucination fixture** — `data/fixtures/hallucination_japan_visa.json`
+
+Reproducible demo: `hallucinated_visa_answer` claims 60 days visa-free; the single retrieved source states 90 days. Inject into state to trigger the grounding check, watch reflection correct it.
+
+---
+
+### Advanced Memory
+
+**`backend/app/memory/summary.py`** — rolling session summary + `session_update_node`
+
+- `extract_constraints(texts)` — regex pre-screen (`_CONSTRAINT_SIGNALS`) then `small`-tier LLM; returns `{diet, budget, passports, group, seat, ...}`. LLM is only called when the text contains a constraint signal — never on ephemeral chatter.
+- `roll_summary(turns, existing_summary, pinned)` — `small`-tier compression of older turns; the system prompt explicitly prohibits including budget/dietary/passport details (those live in `pinned_constraints`).
+- `get_session_context(user_id) → {session_summary, pinned_constraints}` — in-memory store (Step 8 replaces backing store with SQLite reads).
+- `add_turn(user_id, query, response)` — appends turn; extracts constraints; rolls once `MAX_RAW_TURNS = 6` accumulate.
+- `session_update_node` — terminal graph node on `ok` path; calls `add_turn`, then lazy-imports `promote_to_longterm` (avoids `summary ↔ longterm` circular dependency), then calls `semantic_set` to cache the new result.
+
+**`backend/app/state/longterm_store.py`** — SQLite backing store (`wanderwise_memory.db`, `.gitignore`-d)
+
+Two tables:
+- `preferences(user_id, key, value, source, updated_at)` — upsert via `ON CONFLICT`, keyed by `(user_id, key)`, idempotent. All ops degrade-safe.
+- `memories(id, user_id, text, embedding, created_at)` — text + optional fastembed vector for semantic recall.
+
+**`backend/app/memory/longterm.py`** — write policy + persistence + semantic recall
+
+- `should_persist(query) → (bool, dict)` — write policy: regex pre-screen (`_EXPLICIT_PREF_RE`) then `extract_constraints` LLM call. **Persist:** explicit first-person preference statements. **Discard:** ephemeral chatter, search results, assistant responses.
+- `promote_to_longterm(user_id, query, response)` — applies write policy; calls `set_pref` for each extracted key; stores a `memories` entry (with fastembed vector when available).
+- `load_longterm_prefs(user_id) → dict` — reads `preferences` table; called at session start.
+- `semantic_recall(user_id, query, top_k=3) → list[str]` — embeds query, cosine-ranks all memories, falls back to flat text list if embeddings unavailable.
+
+**`backend/app/memory/session.py`** — `load_profile_node` extended (Phase 3)
+
+Merge order at session start: **demo profile < SQLite long-term prefs < in-memory session pinned** (most recent wins). Long-term `diet` pref overrides demo default and flows into both `preferences` (for downstream agents) and `pinned_constraints` (for assembler injection). Logs which long-term prefs were loaded.
+
+**`backend/app/orchestrator/nodes/assemble.py`** — minimal extension
+
+If `pinned_constraints` or `session_summary` are present in state, a `prior_section` block is prepended to the LLM human message: `"User constraints (always honour these): {dict}"` + `"Previous conversation summary: ..."`. Preserves early-stated constraints across a long session.
+
+---
+
+### Caching
+
+**`backend/app/memory/cache.py`** — `_InMemoryCache`, `_RedisCache`, public API
+
+Backend: lazy singleton; uses `_RedisCache` (redis-py, Upstash protocol) when `UPSTASH_REDIS_URL` is set, otherwise `_InMemoryCache` (in-process dict). Both expose the same interface.
+
+**Semantic cache:**
+- `semantic_get(query) → str | None` — embeds query via fastembed (lazy, degrade-safe); cosine-compares against all cached embeddings; returns cached response if ≥ `CACHE_SEMANTIC_SIMILARITY_THRESHOLD` (default 0.92). Returns `None` if fastembed unavailable.
+- `semantic_set(query, response)` — embeds query; stores response under `sem:{sha256[:16]}`; adds to the semantic index (bounded to 200 entries).
+- `cache_lookup_node` / `route_cache` — graph node between `input_guardrail` and `router`; hit → `output_guardrail` (skips all agents, still passes guardrail checks); miss → `router`.
+
+**API / tool-result cache:**
+- `api_get(key) → str | None` / `api_set(key, value, ttl)` — used by weather and RAG agents.
+- Cache keys include a **data-version slug**: `weather:v1:{location}`, `rag:v1:{country_iso}:{passport}:{query_hash}`. Bumping `v1` to `v2` invalidates stale entries without a full cache flush — the seam that coordinates with Phase 4's staleness detection.
+- TTLs: visa docs 24h (`CACHE_TTL_VISA_DOCS`), weather 1h (`CACHE_TTL_WEATHER`), flights 0 (never cached — prices change too fast).
+- Safety guarantee: cache hits route through `output_guardrail` — schema, budget, and booking checks still run. Grounding check naturally skips (no `rag_results` on a cache hit).
+
+---
+
+### Prompt Registry — Phase 3 Additions
+
+| File | Tier | Description |
+|---|---|---|
+| `guardrails/input_topicality.yaml` | small | Topicality classifier; `{allowed, reason, categories}`; threshold 0.95 |
+| `guardrails/input_injection.yaml` | small | Injection/jailbreak classifier; `{injection, reason, attack_type}`; threshold 1.00 |
+| `guardrails/output_grounding.yaml` | large | Faithfulness judge; `{grounded, reason, ungrounded_claims}`; threshold 1.00; `metric: llm_judge` wired Phase 5 |
+| `guardrails/output_no_hallucinated_booking.yaml` | large | Structural rule prompt; designed here, enforced Phase 4; eval cases added Phase 4 |
+| `orchestrator/self_reflection_critique.yaml` | large | Critique-and-fix prompt; `{critique, corrected_summary, corrected_visa_answer}`; threshold 1.00 |
+
+All 5 new prompts auto-discovered by `run_prompt_eval.py`. Total active prompts: **13**.
+
+---
+
+### Config — Phase 3 Additions
+
+New fields in `backend/app/config.py` / `.env.example`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_RETRY_ATTEMPTS` | 3 | Max retry attempts per LLM call |
+| `LLM_RETRY_BASE_DELAY` | 1.0 | Base backoff in seconds (doubles each attempt) |
+| `LLM_CIRCUIT_FAILURE_THRESHOLD` | 5 | Consecutive failures before circuit opens |
+| `LLM_CIRCUIT_COOLDOWN_S` | 60.0 | Seconds in OPEN before HALF_OPEN probe |
+| `GUARDRAIL_TOPICALITY_THRESHOLD` | 0.95 | Min pass rate for topicality prompt eval gate |
+| `GUARDRAIL_GROUNDING_THRESHOLD` | 0.80 | Min faithfulness score before reflection |
+| `GUARDRAIL_MAX_REFLECTION_ATTEMPTS` | 2 | Reflection loop cap |
+| `CACHE_TTL_VISA_DOCS` | 86400 | Visa doc cache TTL in seconds |
+| `CACHE_TTL_WEATHER` | 3600 | Weather cache TTL in seconds |
+| `CACHE_TTL_FLIGHTS` | 0 | 0 = never cache flight prices |
+| `CACHE_SEMANTIC_SIMILARITY_THRESHOLD` | 0.92 | Cosine threshold for semantic cache hit |
+
+---
+
+### Eval & Tests — Phase 3 Additions
+
+**`backend/tests/eval/dataset.jsonl`** — extended from 5 → 11 cases:
+- 3 red-team inputs (`expected_blocked: true`): off-topic poem, injection exfiltration, DAN jailbreak.
+- 3 false-block prevention (`expected_blocked: false`): Bali trip planning, Japan visa question, Bangkok fault-tolerance check.
+
+**`backend/tests/eval/run_eval.py`** — extended with Phase 3 checks:
+- `expected_blocked`: verifies `input_verdict.allowed`. Correctly-blocked cases skip router/assemble/summary checks (those nodes never ran — skipping is correct).
+- Aggregate metrics reported at run end and enforced as CI thresholds:
+  - **Block rate ≥ 95%** across all `expected_blocked: true` cases.
+  - **False-block rate < 5%** across all `expected_blocked: false` cases.
+
+**`backend/tests/eval/cases/guardrails/`** — 4 new per-prompt JSONL files (auto-discovered by `run_prompt_eval.py`):
+- `input_topicality.jsonl` (8 cases), `input_injection.jsonl` (10 cases), `output_grounding.jsonl` (5 cases), `self_reflection_critique.jsonl` (3 cases).
+
+**`backend/tests/unit/test_reliability.py`** — 15 offline tests: all retry/fallback/circuit-breaker state transitions; transport error detection; monkeypatched provider.
+
+**`backend/tests/unit/test_guardrails.py`** — 48 offline tests across 8 classes: injection heuristics (14 parametrized), route_input / route_output / route_cache, validate_schema / validate_budget / no-hallucinated-booking, InMemoryCache TTL + semantic search, cosine similarity, fault-injection simulation (fully-degraded state still produces valid output structure).
+
+**Total unit tests: 86** (was 23 after Phase 2). All pass; `ruff check backend/` is clean.
+
+---
+
+### Dependencies — Phase 3 Additions (`pyproject.toml`)
+
+| Package | Purpose |
+|---|---|
+| `presidio-analyzer>=2.2` | PII entity detection |
+| `presidio-anonymizer>=2.2` | PII entity redaction |
+| `redis>=5.0` | Redis client for Upstash cache backend |
+
+`Dockerfile`: `RUN uv run python -m spacy download en_core_web_lg` added after `uv sync`.
+
+---
+
+### Phase 3 Exit State
+
+- Input guardrails (topicality, injection, PII) wired as conditional graph edges; blocks short-circuit to `refusal` before any agent runs ✅
+- PII redacted before the model **and** before LangSmith traces (pre-state-write) ✅
+- Infra retry: exponential backoff + jitter, fallback tier demotion → Groq → stub, circuit breaker; degraded results flagged ✅
+- Output guardrails: schema + budget (deterministic, cheap-first) + grounding (LLM judge) ✅
+- No-hallucinated-booking structural seam defined; test deferred to Phase 4 ✅
+- Self-reflection subgraph: induced hallucination fails grounding → critique → corrected output; cycle capped at 2, all events trace-visible ✅
+- Short-term rolling summary preserves pinned constraints (budget, diet, passport) across a long session ✅
+- Long-term write policy persists explicit preferences to SQLite; `diet: vegetarian` recalled in a new session ✅
+- Semantic cache + API/tool cache with data-versioned keys and TTLs; hits still pass output guardrails ✅
+- Red-team cases in CI gate; block rate ≥ 95% + false-block rate < 5% enforced; 5 guardrail/reflection prompts in per-prompt gate ✅
+- 86/86 unit tests pass; `ruff check backend/` clean ✅
+
+---
+
 ## Environment Variables
 
 | Variable | Required now | Purpose |
@@ -344,3 +607,11 @@ All eight active prompts have paired per-prompt eval cases under `tests/eval/cas
 | `UPSTASH_REDIS_TOKEN` | Phase 2 | Redis auth |
 | `DUFFEL_API_KEY` | Phase 2 | Flight + hotel search |
 | `HF_TOKEN` | CI/Deploy | HF Spaces push |
+| `LLM_RETRY_ATTEMPTS` | No | Retry cap (default 3) |
+| `LLM_RETRY_BASE_DELAY` | No | Backoff base seconds (default 1.0) |
+| `LLM_CIRCUIT_FAILURE_THRESHOLD` | No | Failures before circuit opens (default 5) |
+| `LLM_CIRCUIT_COOLDOWN_S` | No | Circuit cooldown seconds (default 60) |
+| `GUARDRAIL_MAX_REFLECTION_ATTEMPTS` | No | Reflection loop cap (default 2) |
+| `CACHE_TTL_VISA_DOCS` | No | Visa doc cache TTL seconds (default 86400) |
+| `CACHE_TTL_WEATHER` | No | Weather cache TTL seconds (default 3600) |
+| `CACHE_SEMANTIC_SIMILARITY_THRESHOLD` | No | Semantic cache cosine threshold (default 0.92) |

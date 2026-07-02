@@ -11,6 +11,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 from backend.app.tools.weather import WeatherInput, WeatherTool
@@ -38,6 +39,18 @@ def weather_node(state: GraphState) -> dict:
     except Exception:
         location = state.get("location", "unknown")
 
+    # API cache check (TTL=1h — weather is reasonably fresh for an hour)
+    _cache_key = f"weather:v1:{location}"
+    cached = api_get(_cache_key)
+    if cached:
+        logger.info("WeatherAgent: cache HIT for location=%r", location)
+        return {
+            "weather": json.loads(cached),
+            "degraded": False,
+            "weather_extraction_tier": _EXTRACTION_TIER,
+            "cache_source": "api",
+        }
+
     logger.info("WeatherAgent: fetching forecast for location=%r", location)
 
     result = _weather_tool.run(WeatherInput(location=location))
@@ -49,6 +62,8 @@ def weather_node(state: GraphState) -> dict:
             len(result.data.daily),
             result.data.location,
         )
+        from backend.app.config import settings
+        api_set(_cache_key, json.dumps(weather_data), ttl=settings.CACHE_TTL_WEATHER)
         return {
             "weather": weather_data,
             "degraded": False,
