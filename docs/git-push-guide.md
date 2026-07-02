@@ -280,7 +280,7 @@ Output checks: schema + budget (deterministic) + grounding (LLM judge).
 reflection node critiques and fixes failed output; cycle capped at 2 attempts.
 Hallucination fixture added for reproducible demo. Booking seam designed."
 
-git push origin main
+git push origin phase-3/implementation
 ```
 
 ---
@@ -305,7 +305,7 @@ longterm_store.py: SQLite preferences + memories tables (degrade-safe).
 longterm.py: write policy promotes explicit prefs only; semantic recall via
 fastembed. session.py: merges SQLite prefs into pinned_constraints at start."
 
-git push origin main
+git push origin phase-3/implementation
 ```
 
 ---
@@ -333,7 +333,7 @@ Weather and RAG agents use API cache. graph.py: 14-node Phase 3 topology with
 input_guardrail, cache_lookup, output_guardrail, reflection, session_update.
 Eval: 11 cases with block/false-block rate CI thresholds (≥95% / <5%)."
 
-git push origin main
+git push origin phase-3/implementation
 ```
 
 ---
