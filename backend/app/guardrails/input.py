@@ -115,6 +115,11 @@ def check_injection(query: str) -> Verdict:
     try:
         response = llm.complete(p.tier, messages)
         parsed = json.loads(response.text.strip())
+        # TODO(phase-4): enforce strict JSON schema via structured outputs.
+        # Guard: quota exhaustion can make the LLM return a bare JSON string
+        # (e.g. "injection") instead of an object; treat that as parse error.
+        if not isinstance(parsed, dict):
+            raise ValueError(f"expected dict, got {type(parsed).__name__}")
         is_inj = bool(parsed.get("injection", False))
         attack_type = parsed.get("attack_type") or "unknown"
         if is_inj:
@@ -161,6 +166,9 @@ def check_topicality(query: str) -> Verdict:
     try:
         response = llm.complete(p.tier, messages)
         parsed = json.loads(response.text.strip())
+        # TODO(phase-4): enforce strict JSON schema via structured outputs.
+        if not isinstance(parsed, dict):
+            raise ValueError(f"expected dict, got {type(parsed).__name__}")
         return Verdict(
             allowed=bool(parsed.get("allowed", True)),
             reason=str(parsed.get("reason", "")),
