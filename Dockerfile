@@ -22,6 +22,10 @@ COPY pyproject.toml uv.lock README.md ./
 # Install production dependencies (no dev extras)
 RUN uv sync --no-dev --frozen
 
+# uv-managed venvs omit pip by design. spaCy's model downloader shells out
+# to pip at runtime, so inject it once here to fix the whole class of problem.
+RUN uv pip install pip
+
 # Download the spaCy model required by Presidio's NER recogniser
 RUN uv run python -m spacy download en_core_web_lg
 
