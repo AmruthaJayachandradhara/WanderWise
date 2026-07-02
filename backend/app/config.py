@@ -3,7 +3,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # --- API Keys & Secrets (Loaded from .env) ---
-    GEMINI_API_KEY: str
+    # Optional default allows unit tests to import without a live key.
+    # The eval steps in CI pass the real key via secrets.GEMINI_API_KEY.
+    GEMINI_API_KEY: str = ""
     DUFFEL_API_KEY: str | None = None
     TICKETMASTER_API_KEY: str | None = None
     EVENTBRITE_TOKEN: str | None = None
