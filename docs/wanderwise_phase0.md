@@ -211,3 +211,5 @@ If you find yourself doing any of these, you've started Phase 1 — which is fin
 ## Hand-off to Phase 1
 
 Phase 1 ("Foundation & Skeleton") begins from a clean, fully-credentialed repo. Its first acts will be: encode the Decision Log into `config.py`, build the 2-tier LLM abstraction (Gemini primary, Groq fallback), wire LangSmith tracing into the first node, stand up the FastAPI streaming endpoint and a minimal React chat UI, build the LangGraph skeleton with one agent (Weather), seed the empty eval harness + CI gate stub, and deploy the skeleton to your chosen platform — proving the full path works end-to-end before any real complexity lands.
+
+updating keys
