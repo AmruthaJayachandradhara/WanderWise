@@ -368,3 +368,4 @@ Expected: 86/86 unit tests pass; ruff clean; 14 nodes; 13 active prompts auto-di
 - Upstash Redis URL format: if `.env` contains `UPSTASH_REDIS_URL=https://...upstash.io`, `cache.py` converts it to `rediss://` automatically.
 - Red-team eval (`run_eval.py`) requires `GEMINI_API_KEY`; the per-prompt gate (`run_prompt_eval.py`) runs the 5 guardrail prompts in isolation and is cheap.
 - Qdrant must be running (resume from Qdrant Cloud dashboard if paused) for RAG/grounding cases to fire.
+
