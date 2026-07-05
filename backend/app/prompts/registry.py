@@ -44,4 +44,10 @@ def render(prompt_id: str, **kwargs: str) -> str:
     missing = set(p.input_variables) - set(kwargs)
     if missing:
         raise ValueError(f"Prompt '{prompt_id}' is missing variables: {missing}")
+    if not p.input_variables:
+        # No variables to substitute — return template as-is.
+        # str.format() must not run: prompt templates contain raw JSON examples
+        # with {"key": value} syntax that Python's format parser mistakes for
+        # format placeholders, raising KeyError on the JSON key names.
+        return p.template
     return p.template.format(**kwargs)
