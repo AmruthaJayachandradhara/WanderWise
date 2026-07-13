@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     GUARDRAIL_GROUNDING_THRESHOLD: float = 0.80  # min faithfulness score before retry
     GUARDRAIL_MAX_REFLECTION_ATTEMPTS: int = 2
 
+    # --- Booking & Actions (Phase 4) ---
+    # booking type → provider backend; see backend/app/booking/provider.py
+    BOOKING_PROVIDER_MAP: Dict[str, str] = {
+        "flight": "duffel",
+        "hotel": "duffel",
+        "restaurant": "mock",
+    }
+
     # --- Cache TTLs in seconds (Phase 3) ---
     CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly
     CACHE_TTL_WEATHER: int = 3600        # 1h — forecast is reasonably fresh
