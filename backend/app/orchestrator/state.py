@@ -100,6 +100,10 @@ class GraphState(TypedDict, total=False):
     confirmations: list[dict]        # all confirmed reservations this run
     confirmation_id: str | None      # primary confirmation (read by output guardrail)
 
+    # --- Query decomposition (Phase 4) ---
+    sub_queries: list[dict]          # [{query, passport, destination, kind}] for RAG fan-out
+    decompose_tier: str              # tier used by the decompose node
+
     # --- Activities (Phase 4) ---
     restaurants: list[dict] | None   # Overpass restaurant results
     events: list[dict] | None        # Ticketmaster events (deep links only)

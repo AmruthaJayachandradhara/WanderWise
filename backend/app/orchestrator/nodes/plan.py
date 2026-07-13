@@ -29,12 +29,14 @@ def plan_node(state: GraphState) -> dict:
     home_airport = state.get("home_airport", "unknown")
     passport_country = state.get("passport_country", "unknown")
     budget_default = state.get("budget_default", 3000.0)
+    sub_queries = state.get("sub_queries") or []
 
     context = (
         f"Query: {query}\n"
         f"Home airport: {home_airport}\n"
         f"Passport: {passport_country}\n"
-        f"Budget: {budget_default}"
+        f"Budget: {budget_default}\n"
+        f"RAG sub-queries planned: {len(sub_queries) or 1}"
     )
 
     p = get_prompt(_PROMPT_ID)
@@ -53,6 +55,13 @@ def plan_node(state: GraphState) -> dict:
     except (json.JSONDecodeError, AttributeError):
         logger.warning("Plan: failed to parse response, defaulting to all agents")
         agents_needed = _DEFAULT_AGENTS
+
+    # Decomposition-aware annotation (trace metadata; topology stays static):
+    # a multi-sub-query run shows its RAG fan-out width in the plan trace.
+    if len(sub_queries) > 1 and "rag" in agents_needed:
+        agents_needed = [
+            f"rag×{len(sub_queries)}" if a == "rag" else a for a in agents_needed
+        ]
 
     logger.info(
         "Plan: agents_needed=%s prompt_version=%d",

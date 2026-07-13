@@ -1,0 +1,65 @@
+prompt_id: orchestrator/decompose_query
+version: 1
+tier: small
+status: active
+description: >
+  Splits a multi-part travel query into independent sub-queries for the RAG
+  fan-out — one per (passport, destination) pair. Multi-passport queries
+  ("my partner has an Indian passport") produce one sub-query per passport;
+  multi-city queries produce one per city. Single-subject queries produce
+  exactly one sub-query. Also detects booking intent (booking_requested),
+  which gates the Action agent's confirmation flow.
+
+template: |
+  You are a query planner for a travel assistant. Split the user's query
+  into independent lookup sub-queries, one per (passport, destination) pair.
+
+  Rules:
+  - Default passport is the profile passport. Add more passports ONLY when
+    the query mentions travellers with other passports/nationalities.
+  - Add more destinations ONLY when the query names multiple cities or
+    countries to visit.
+  - Each sub-query's "query" is a self-contained question (e.g. "Visa
+    requirements for Indian passport holders visiting Japan").
+  - kind: "visa" for entry/visa/advisory lookups, "guide" for destination
+    information lookups.
+  - A simple single-passport single-destination query yields exactly ONE
+    sub-query.
+  - booking_requested: true only if the user asks to book, reserve, or
+    confirm something (not merely to plan or search).
+  Respond with valid JSON only — no markdown, no explanation:
+  {"booking_requested": <true|false>, "sub_queries": [{"query": "<self-contained question>", "passport": "<ISO country or name>", "destination": "<city or country>", "kind": "visa|guide"}]}
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    booking_requested:
+      type: boolean
+    sub_queries:
+      type: array
+      items:
+        type: object
+        properties:
+          query:
+            type: string
+          passport:
+            type: string
+          destination:
+            type: string
+          kind:
+            type: string
+  required:
+    - booking_requested
+    - sub_queries
+
+eval:
+  dataset: tests/eval/cases/orchestrator/decompose_query.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-07-13
+    change: "Phase 4 Step 7 — multi-passport/multi-city decomposition + booking intent."

@@ -1,11 +1,11 @@
 """RAG agent node — retrieves and synthesises a cited visa/advisory answer.
 
-Resolves the destination country to an ISO code, retrieves pre-filtered
-chunks (country + passport), and synthesises a grounded answer on the large
-tier with citations and a verify-with-official-sources disclaimer.
-
-Single-subject scope: one passport, one destination. Multi-passport
-decomposition is Phase 4.
+Fans out over the decompose node's sub-queries (Phase 4): each
+(passport, destination) pair is resolved and retrieved independently
+through the Phase 2 pipeline, then a single large-tier synthesis call
+merges the labeled per-subquery sources into one per-traveler/per-city
+answer. A single-subject query is the degenerate one-sub-query case and
+behaves exactly as before.
 """
 
 import hashlib
@@ -96,20 +96,40 @@ def _resolve_country_iso(location: str, query: str) -> str:
 
 
 def rag_node(state: GraphState) -> dict:
-    """Retrieve and synthesise a cited visa/advisory answer."""
+    """Retrieve per sub-query, then synthesise one merged, cited answer."""
     query = state.get("query", "")
     location = state.get("location", "")
     passport = state.get("passport_country", "US")
 
-    country_iso = _resolve_country_iso(location, query)
-    logger.info("RAG: resolved country_iso=%s passport=%s", country_iso, passport)
+    # Decompose fan-out (Phase 4). No sub_queries in state (e.g. direct node
+    # invocation in tests) → single-subject degenerate case.
+    sub_queries = state.get("sub_queries") or [
+        {"query": query, "passport": passport, "destination": location, "kind": "visa"}
+    ]
 
-    # API cache check — visa docs change slowly (TTL 24h), keyed by data version
+    # Resolve each (passport, destination) pair up front — the cache key and
+    # the retrieval filters both need the ISO codes.
+    subjects = []
+    for sq in sub_queries:
+        iso = _resolve_country_iso(sq.get("destination", ""), sq.get("query", query))
+        subjects.append((sq, iso, sq.get("passport") or passport))
+    logger.info(
+        "RAG: %d sub-quer%s — %s",
+        len(subjects),
+        "y" if len(subjects) == 1 else "ies",
+        [(p, iso) for _, iso, p in subjects],
+    )
+
+    # API cache — visa docs change slowly (TTL 24h), keyed by data version.
+    # With one sub-query this key is identical to the Phase 3 format.
     _qhash = hashlib.sha256(query.encode()).hexdigest()[:12]
-    _cache_key = f"rag:v1:{country_iso}:{passport}:{_qhash}"
+    _cache_key = (
+        f"rag:v1:{'-'.join(iso for _, iso, _ in subjects)}:"
+        f"{'-'.join(p for _, _, p in subjects)}:{_qhash}"
+    )
     cached = api_get(_cache_key)
     if cached:
-        logger.info("RAG: cache HIT for %s/%s", country_iso, passport)
+        logger.info("RAG: cache HIT for %s", _cache_key)
         cached_data = json.loads(cached)
         return {
             "rag_results": cached_data["rag_results"],
@@ -119,10 +139,33 @@ def rag_node(state: GraphState) -> dict:
             "cache_source": "api",
         }
 
-    chunks = retrieve(query, country_iso, passport)
+    # Fan-out: retrieve per sub-query through the Phase 2 pipeline.
+    # Sequential by design — retrieval is local (fastembed + Qdrant filter)
+    # and 2-3 sub-queries don't justify Send-API state-merge complexity.
+    sections = []          # (label, chunks) per sub-query with results
+    rag_results = []
+    for sq, iso, sq_passport in subjects:
+        chunks = retrieve(sq.get("query", query), iso, sq_passport)
+        label = f"{sq_passport} passport → {sq.get('destination') or iso}"
+        if not chunks:
+            logger.info("RAG: no chunks for %s", label)
+            continue
+        sections.append((label, chunks))
+        rag_results.extend(
+            {
+                "subject": label,
+                "text": c.text,
+                "score": c.score,
+                "source_url": c.source_url,
+                "country_iso": c.country_iso,
+                "last_verified": c.last_verified,
+                "advisory_level": c.advisory_level,
+            }
+            for c in chunks
+        )
 
-    if not chunks:
-        logger.info("RAG: no chunks retrieved for %s/%s", country_iso, passport)
+    if not sections:
+        logger.info("RAG: no chunks retrieved for any sub-query")
         return {
             "rag_results": [],
             "visa_answer": None,
@@ -130,34 +173,32 @@ def rag_node(state: GraphState) -> dict:
             "rag_tier": _SYNTHESIS_TIER,
         }
 
-    context = "\n\n".join(
-        f"[{i}] {c.text}\nSource: {c.source_url} (verified {c.last_verified})"
-        for i, c in enumerate(chunks, start=1)
-    )
+    # Merge: one synthesis call over labeled per-subquery source blocks.
+    ref = 0
+    blocks = []
+    for label, chunks in sections:
+        lines = [f"=== {label} ==="]
+        for c in chunks:
+            ref += 1
+            lines.append(
+                f"[{ref}] {c.text}\nSource: {c.source_url} (verified {c.last_verified})"
+            )
+        blocks.append("\n".join(lines))
+    context = "\n\n".join(blocks)
 
     messages = [
         SystemMessage(content=render(_SYNTHESIS_PROMPT)),
         HumanMessage(content=(
-            f"Passport: {passport}\nDestination ISO: {country_iso}\n"
-            f"Question: {query}\n\nRetrieved sources:\n{context}"
+            f"Question: {query}\n\nRetrieved sources by subject:\n{context}"
         )),
     ]
     response = llm.complete(_SYNTHESIS_TIER, messages)
     visa_answer = response.text.strip() + _DISCLAIMER
 
-    rag_results = [
-        {
-            "text": c.text,
-            "score": c.score,
-            "source_url": c.source_url,
-            "country_iso": c.country_iso,
-            "last_verified": c.last_verified,
-            "advisory_level": c.advisory_level,
-        }
-        for c in chunks
-    ]
-
-    logger.info("RAG: synthesised answer from %d chunks", len(chunks))
+    logger.info(
+        "RAG: synthesised answer from %d chunks across %d subject(s)",
+        ref, len(sections),
+    )
     from backend.app.config import settings
     api_set(
         _cache_key,

@@ -52,6 +52,7 @@ from backend.app.orchestrator.nodes.plan import plan_node
 from backend.app.orchestrator.nodes.reflection import reflection_node
 from backend.app.orchestrator.router import router_node
 from backend.app.orchestrator.state import GraphState
+from backend.app.rag.decompose import decompose_node
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ def build_graph():
     builder.add_node("input_guardrail", input_guardrail_node)
     builder.add_node("refusal", refusal_node)
     builder.add_node("router", router_node)
+    builder.add_node("decompose", decompose_node)
     builder.add_node("plan", plan_node)
     builder.add_node("travel_search", travel_search_node)
     builder.add_node("weather", weather_node)
@@ -99,7 +101,9 @@ def build_graph():
         {"hit": "output_guardrail", "miss": "router"},
     )
 
-    builder.add_edge("router", "plan")
+    # Decomposition sits between router and plan: sub-queries + booking intent
+    builder.add_edge("router", "decompose")
+    builder.add_edge("decompose", "plan")
 
     # Fan-out: plan dispatches all four agents in parallel
     builder.add_edge("plan", "travel_search")
