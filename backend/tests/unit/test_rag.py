@@ -93,3 +93,57 @@ def test_rag_node_empty_retrieval(monkeypatch):
     assert result["rag_results"] == []
     assert result["visa_answer"] is None
     assert result["rag_degraded"] is False
+
+
+def test_rag_node_malformed_cache_entry_refetches(monkeypatch):
+    """A corrupted/incompatible cache payload must not raise KeyError — it
+    should be treated as a miss and fall through to a live retrieve+synthesise.
+
+    Regression test for the TODO(phase-4) KeyError-swallow: run_eval.py used
+    to catch KeyError around graph.invoke() because this cache-hit path did
+    cached_data["visa_answer"] directly on whatever json.loads() returned.
+    """
+    import backend.app.agents.rag as rag_module
+
+    monkeypatch.setattr(rag_module, "_resolve_country_iso", lambda loc, q: "JP")
+    monkeypatch.setattr(rag_module, "retrieve", lambda q, c, p: _make_chunks(1))
+    monkeypatch.setattr(
+        rag_module.llm, "complete",
+        lambda tier, msgs, **kw: _llm_response("Visa-free for 90 days [1]."),
+    )
+    # Not valid JSON at all
+    monkeypatch.setattr(rag_module, "api_get", lambda key: "not-json{")
+    monkeypatch.setattr(rag_module, "api_set", lambda key, value, ttl=0: None)
+
+    result = rag_module.rag_node({
+        "query": "Do I need a visa for Japan?",
+        "location": "Tokyo",
+        "passport_country": "US",
+    })
+
+    assert result.get("cache_source") != "api"
+    assert result["visa_answer"] is not None
+
+
+def test_rag_node_cache_entry_missing_keys_refetches(monkeypatch):
+    """Valid JSON but wrong shape (e.g. a stale pre-Phase-4 payload) also
+    falls through to a live fetch instead of raising."""
+    import backend.app.agents.rag as rag_module
+
+    monkeypatch.setattr(rag_module, "_resolve_country_iso", lambda loc, q: "JP")
+    monkeypatch.setattr(rag_module, "retrieve", lambda q, c, p: _make_chunks(1))
+    monkeypatch.setattr(
+        rag_module.llm, "complete",
+        lambda tier, msgs, **kw: _llm_response("Visa-free for 90 days [1]."),
+    )
+    monkeypatch.setattr(rag_module, "api_get", lambda key: "{}")
+    monkeypatch.setattr(rag_module, "api_set", lambda key, value, ttl=0: None)
+
+    result = rag_module.rag_node({
+        "query": "Do I need a visa for Japan?",
+        "location": "Tokyo",
+        "passport_country": "US",
+    })
+
+    assert result.get("cache_source") != "api"
+    assert result["visa_answer"] is not None

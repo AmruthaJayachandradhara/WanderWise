@@ -11,6 +11,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
@@ -33,8 +34,8 @@ def weather_node(state: GraphState) -> dict:
             SystemMessage(content=render(_EXTRACTION_PROMPT)),
             HumanMessage(content=query),
         ]
-        response = llm.complete(_EXTRACTION_TIER, messages)
-        parsed = json.loads(response.text.strip())
+        response = llm.complete(_EXTRACTION_TIER, messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="weather_extraction")
         location = parsed.get("location") or state.get("location", "unknown")
     except Exception:
         location = state.get("location", "unknown")
@@ -45,7 +46,7 @@ def weather_node(state: GraphState) -> dict:
     if cached:
         logger.info("WeatherAgent: cache HIT for location=%r", location)
         return {
-            "weather": json.loads(cached),
+            "weather": parse_json_dict(cached, context="weather_cache"),
             "degraded": False,
             "weather_extraction_tier": _EXTRACTION_TIER,
             "cache_source": "api",

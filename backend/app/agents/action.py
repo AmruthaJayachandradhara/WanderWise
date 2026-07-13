@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import settings
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 from backend.app.tools.calendar import build_trip_ics
@@ -63,13 +64,12 @@ def _draft_email(state: GraphState) -> dict:
         SystemMessage(content=render(_PROMPT_ID)),
         HumanMessage(content=_itinerary_context(state)),
     ]
-    response = llm.complete(_ACTION_TIER, messages)
-    try:
-        parsed = json.loads(response.text.strip())
+    response = llm.complete(_ACTION_TIER, messages, json_mode=True)
+    parsed = parse_json_dict(response.text.strip(), context="action_email")
+    if "subject" in parsed and "body" in parsed:
         return {"subject": parsed["subject"], "body": parsed["body"]}
-    except (json.JSONDecodeError, TypeError, KeyError):
-        logger.warning("Action: email draft parse failed — using plain-text fallback")
-        return {"subject": f"Your {location} itinerary", "body": response.text.strip()}
+    logger.warning("Action: email draft parse failed — using plain-text fallback")
+    return {"subject": f"Your {location} itinerary", "body": response.text.strip()}
 
 
 def _build_pending_actions(state: GraphState, email_subject: str) -> list[dict]:

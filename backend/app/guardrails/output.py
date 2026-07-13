@@ -11,13 +11,13 @@ the expensive LLM judge. Track false-block rate alongside block rate from day
 one — over-blocking is just as bad as under-blocking.
 """
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import settings
 from backend.app.llm import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import get_prompt, render
 
@@ -114,8 +114,8 @@ def check_grounding(state: GraphState) -> dict | None:
         ),
     ]
     try:
-        response = llm.complete(p.tier, messages)
-        parsed = json.loads(response.text.strip())
+        response = llm.complete(p.tier, messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="check_grounding")
         grounded = bool(parsed.get("grounded", True))
         reason = str(parsed.get("reason", ""))
         ungrounded = list(parsed.get("ungrounded_claims", []))

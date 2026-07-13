@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import settings
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
@@ -43,14 +44,8 @@ def _extract_search_args(state: GraphState) -> dict:
         SystemMessage(content=render(_EXTRACT_PROMPT)),
         HumanMessage(content=context),
     ]
-    response = llm.complete(_EXTRACT_TIER, messages)
-    try:
-        parsed = json.loads(response.text.strip())
-        if not isinstance(parsed, dict):
-            raise ValueError("non-dict extraction result")
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Activities: extraction parse failed — using defaults")
-        parsed = {}
+    response = llm.complete(_EXTRACT_TIER, messages, json_mode=True)
+    parsed = parse_json_dict(response.text.strip(), context="activities_extraction")
     return {
         "cuisine": parsed.get("cuisine") or "",
         "event_keyword": parsed.get("event_keyword") or "",
@@ -62,7 +57,10 @@ def _search_restaurants(location: str, cuisine: str) -> list[dict] | None:
     cache_key = f"places:v1:{location.lower()}:{cuisine.lower()}"
     cached = api_get(cache_key)
     if cached:
-        return json.loads(cached)
+        try:
+            return json.loads(cached)
+        except json.JSONDecodeError:
+            logger.warning("Activities: places cache entry corrupted — refetching")
     result = _places_tool.run(PlacesInput(location=location, cuisine=cuisine))
     if not result.success:
         # Retry once without the cuisine filter before giving up
@@ -101,11 +99,9 @@ def _select_restaurant(state: GraphState, restaurants: list[dict], args: dict) -
         SystemMessage(content=render(_SELECT_PROMPT)),
         HumanMessage(content=context),
     ]
-    response = llm.complete(_SELECT_TIER, messages)
-    try:
-        parsed = json.loads(response.text.strip())
-        if parsed.get("venue_id") not in {r["venue_id"] for r in restaurants}:
-            raise ValueError(f"venue_id {parsed.get('venue_id')!r} not in candidates")
+    response = llm.complete(_SELECT_TIER, messages, json_mode=True)
+    parsed = parse_json_dict(response.text.strip(), context="activities_selection")
+    if parsed.get("venue_id") in {r["venue_id"] for r in restaurants}:
         return {
             "venue_id": parsed["venue_id"],
             "name": parsed.get("name", ""),
@@ -113,16 +109,19 @@ def _select_restaurant(state: GraphState, restaurants: list[dict], args: dict) -
             "party_size": parsed.get("party_size", args["party_size"]),
             "reason": parsed.get("reason", ""),
         }
-    except (json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
-        logger.warning("Activities: selection parse failed (%s) — using first candidate", exc)
-        first = restaurants[0]
-        return {
-            "venue_id": first["venue_id"],
-            "name": first["name"],
-            "slot": "",
-            "party_size": args["party_size"],
-            "reason": "fallback: first search result",
-        }
+    logger.warning(
+        "Activities: selection parse failed or venue_id %r not in candidates — "
+        "using first candidate",
+        parsed.get("venue_id"),
+    )
+    first = restaurants[0]
+    return {
+        "venue_id": first["venue_id"],
+        "name": first["name"],
+        "slot": "",
+        "party_size": args["party_size"],
+        "reason": "fallback: first search result",
+    }
 
 
 def activities_node(state: GraphState) -> dict:

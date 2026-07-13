@@ -11,13 +11,13 @@ Also extracts booking_requested (piggybacked — no second intent call),
 which gates the Action agent's high-risk pending_actions.
 """
 
-import json
 import logging
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 
@@ -62,8 +62,8 @@ def decompose_node(state: GraphState) -> dict:
     ]
 
     try:
-        response = llm.complete(_DECOMPOSE_TIER, messages)
-        parsed = json.loads(response.text.strip())
+        response = llm.complete(_DECOMPOSE_TIER, messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="decompose")
         raw_subs = parsed.get("sub_queries")
         if not isinstance(raw_subs, list) or not raw_subs:
             raise ValueError("missing or empty sub_queries")

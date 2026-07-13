@@ -1,5 +1,5 @@
 prompt_id: orchestrator/router_intent
-version: 2
+version: 3
 tier: small
 status: active
 description: >
@@ -11,7 +11,7 @@ description: >
 template: |
   You are a routing assistant. Classify the user's query as a travel planning request.
   Respond with valid JSON only — no markdown, no explanation:
-  {{"task_type": "travel_planning"}}
+  {"task_type": "travel_planning"}
 
 input_variables: []
 
@@ -29,6 +29,13 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 3
+    date: 2026-07-13
+    change: >
+      Fixed a doubled-brace typo in the JSON example ({{...}} instead of
+      {...}). This prompt has input_variables: [], so render() never calls
+      .format() on the template — the double braces were literal text the
+      model would sometimes echo verbatim, producing invalid JSON.
   - version: 2
     date: 2026-06-22
     change: "Agent-symmetry refactor: location extraction removed. Router now returns task_type only."

@@ -16,13 +16,13 @@ The failure mode this prevents: summarising away "my budget is $3000" stated
 in turn 1, then generating an over-budget itinerary in turn 10.
 """
 
-import json
 import logging
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm import llm
+from backend.app.llm.parsing import parse_json_dict
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,8 @@ def _extract_constraints_llm(texts: list[str]) -> dict:
         HumanMessage(content=combined),
     ]
     try:
-        response = llm.complete("small", messages)
-        parsed = json.loads(response.text.strip())
+        response = llm.complete("small", messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="extract_constraints")
         return {k: v for k, v in parsed.items() if v}
     except Exception as exc:
         logger.warning("extract_constraints: failed (%s), returning {}", exc)

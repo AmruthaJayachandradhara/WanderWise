@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 
@@ -86,9 +87,9 @@ def budget_node(state: GraphState) -> dict:
             SystemMessage(content=render(_PROMPT_ID)),
             HumanMessage(content=context),
         ]
-        response = llm.complete(_BUDGET_TIER, messages)
+        response = llm.complete(_BUDGET_TIER, messages, json_mode=True)
         try:
-            parsed = json.loads(response.text.strip())
+            parsed = parse_json_dict(response.text.strip(), context="budget")
             fi = parsed.get("selected_flight_idx", 0)
             hi = parsed.get("selected_hotel_idx", 0)
             selected_flight = top_flights[fi] if top_flights and fi < len(top_flights) else (top_flights[0] if top_flights else None)

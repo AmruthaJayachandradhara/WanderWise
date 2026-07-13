@@ -11,12 +11,12 @@ Offer ranking/selection is deferred to Step 5 (budget node).
 """
 
 import datetime
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import get_prompt, render
 from backend.app.tools.duffel import (
@@ -47,13 +47,8 @@ def travel_search_node(state: GraphState) -> dict:
         HumanMessage(content=f"Home airport: {home_airport}\nToday: {today}\nQuery: {query}"),
     ]
 
-    response = llm.complete(_TIER, messages)
-
-    parsed: dict = {}
-    try:
-        parsed = json.loads(response.text.strip())
-    except (json.JSONDecodeError, AttributeError):
-        logger.warning("TravelSearchAgent: failed to parse extraction JSON, using defaults")
+    response = llm.complete(_TIER, messages, json_mode=True)
+    parsed = parse_json_dict(response.text.strip(), context="travel_search")
 
     # Deterministic fallbacks — never re-prompt
     origin = parsed.get("origin") or home_airport

@@ -58,14 +58,30 @@ class LLMClient:
         messages: list[BaseMessage],
         *,
         config: dict[str, Any] | None = None,
+        json_mode: bool = False,
         **opts: Any,
     ) -> LLMResponse:
         """Call the LLM for the given tier and return a structured response.
+
+        json_mode=True requests the provider's JSON-object response format
+        (both Gemini and Groq expose this via their OpenAI-compatible API),
+        so callers expecting structured output get it enforced server-side
+        rather than by prompt instruction alone. Still parse defensively —
+        see backend.app.llm.parsing.parse_json_dict — since quota-limited
+        fallbacks (tier demotion, Groq, the degraded stub) may not honor it.
 
         On transient failure: retries with exponential backoff.
         On exhausted retries: delegates to try_fallback (tier demotion → Groq → stub).
         If the circuit is open: fast-fails directly to try_fallback.
         """
+        if json_mode:
+            opts = {
+                **opts,
+                "model_kwargs": {
+                    **opts.get("model_kwargs", {}),
+                    "response_format": {"type": "json_object"},
+                },
+            }
         model = self._provider.resolve_model(tier)
 
         # Merge tier/model metadata into config for LangSmith trace visibility

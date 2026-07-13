@@ -1,5 +1,5 @@
 prompt_id: orchestrator/budget_allocation
-version: 1
+version: 2
 tier: large
 status: active
 description: >
@@ -18,7 +18,7 @@ template: |
   - If no combination fits, pick the cheapest available.
 
   Respond with valid JSON only — no markdown, no explanation:
-  {{"selected_flight_idx": 0, "selected_hotel_idx": 0, "reasoning": "<one sentence>"}}
+  {"selected_flight_idx": 0, "selected_hotel_idx": 0, "reasoning": "<one sentence>"}
 
 input_variables: []
 
@@ -42,6 +42,12 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-07-13
+    change: >
+      Fixed a doubled-brace typo in the JSON example — this prompt has
+      input_variables: [], so render() never calls .format() and the
+      double braces were literal text the model could echo verbatim.
   - version: 1
     date: 2026-06-22
     change: "Initial version — LLM-based offer selection with Frankfurter-normalised prices."

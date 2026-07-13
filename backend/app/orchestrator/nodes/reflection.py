@@ -22,13 +22,13 @@ The failed verdict, critique, and corrected output are all visible as
 separate fields in the LangSmith trace for this node's state update.
 """
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import settings
 from backend.app.llm import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
 
@@ -91,8 +91,10 @@ def reflection_node(state: GraphState) -> dict:
     updates: dict = {"reflection_attempts": attempts + 1}
 
     try:
-        response = llm.complete("large", messages)
-        parsed = json.loads(response.text.strip())
+        response = llm.complete("large", messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="reflection")
+        if not parsed:
+            raise ValueError("empty or invalid JSON in reflection response")
 
         critique = str(parsed.get("critique", ""))
         corrected_summary = str(parsed.get("corrected_summary") or current_summary)

@@ -1,5 +1,5 @@
 prompt_id: travel_search/argument_extraction
-version: 1
+version: 2
 tier: small
 status: active
 description: >
@@ -13,7 +13,7 @@ template: |
   Resolve city and country names to IATA airport codes (e.g. Tokyo → TYO, Paris → CDG, London → LHR).
   If a date is not specified, return null for that field — the caller will fill defaults.
   Respond with valid JSON only — no markdown, no explanation:
-  {{"origin": "<IATA>", "destination": "<IATA>", "departure_date": "YYYY-MM-DD or null", "return_date": "YYYY-MM-DD or null", "passengers": <int>}}
+  {"origin": "<IATA>", "destination": "<IATA>", "departure_date": "YYYY-MM-DD or null", "return_date": "YYYY-MM-DD or null", "passengers": <int>}
 
 input_variables: []
 
@@ -40,6 +40,12 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-07-13
+    change: >
+      Fixed a doubled-brace typo in the JSON example — this prompt has
+      input_variables: [], so render() never calls .format() and the
+      double braces were literal text the model could echo verbatim.
   - version: 1
     date: 2026-06-21
     change: "Initial prompt for Duffel flight argument extraction (Phase 2, Step 2)."

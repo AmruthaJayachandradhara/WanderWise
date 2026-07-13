@@ -16,7 +16,6 @@ Check order in the node:
   4. Topicality LLM classifier
 """
 
-import json
 import logging
 import re
 from typing import TypedDict
@@ -25,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.guardrails.pii import redact
 from backend.app.llm import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import get_prompt, render
 
@@ -113,29 +113,25 @@ def check_injection(query: str) -> Verdict:
         HumanMessage(content=query),
     ]
     try:
-        response = llm.complete(p.tier, messages)
-        parsed = json.loads(response.text.strip())
-        # TODO(phase-4): enforce strict JSON schema via structured outputs.
-        # Guard: quota exhaustion can make the LLM return a bare JSON string
-        # (e.g. "injection") instead of an object; treat that as parse error.
-        if not isinstance(parsed, dict):
-            raise ValueError(f"expected dict, got {type(parsed).__name__}")
-        is_inj = bool(parsed.get("injection", False))
-        attack_type = parsed.get("attack_type") or "unknown"
-        if is_inj:
-            return Verdict(
-                allowed=False,
-                reason=str(parsed.get("reason", "Injection detected by classifier")),
-                categories=["injection", attack_type],
-            )
-        return Verdict(
-            allowed=True,
-            reason=str(parsed.get("reason", "No injection detected")),
-            categories=["clean"],
-        )
+        response = llm.complete(p.tier, messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="check_injection")
     except Exception:
-        logger.warning("check_injection: failed to parse LLM response, allowing by default")
+        logger.warning("check_injection: LLM call failed, allowing by default")
         return Verdict(allowed=True, reason="parse_error_allow", categories=["parse_error"])
+
+    is_inj = bool(parsed.get("injection", False))
+    attack_type = parsed.get("attack_type") or "unknown"
+    if is_inj:
+        return Verdict(
+            allowed=False,
+            reason=str(parsed.get("reason", "Injection detected by classifier")),
+            categories=["injection", attack_type],
+        )
+    return Verdict(
+        allowed=True,
+        reason=str(parsed.get("reason", "No injection detected")),
+        categories=["clean"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +160,8 @@ def check_topicality(query: str) -> Verdict:
         HumanMessage(content=query),
     ]
     try:
-        response = llm.complete(p.tier, messages)
-        parsed = json.loads(response.text.strip())
-        # TODO(phase-4): enforce strict JSON schema via structured outputs.
-        if not isinstance(parsed, dict):
-            raise ValueError(f"expected dict, got {type(parsed).__name__}")
+        response = llm.complete(p.tier, messages, json_mode=True)
+        parsed = parse_json_dict(response.text.strip(), context="check_topicality")
         return Verdict(
             allowed=bool(parsed.get("allowed", True)),
             reason=str(parsed.get("reason", "")),

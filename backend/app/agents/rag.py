@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import settings
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import render
@@ -155,21 +156,23 @@ def rag_node(state: GraphState) -> dict:
     )
     cached = api_get(_cache_key)
     if cached:
-        logger.info("RAG: cache HIT for %s", _cache_key)
-        cached_data = json.loads(cached)
-        # Staleness is re-evaluated on every hit — cached answers age too
-        stale, warning = _staleness_warning(cached_data["rag_results"])
-        visa_answer = cached_data["visa_answer"]
-        if visa_answer and stale:
-            visa_answer += warning
-        return {
-            "rag_results": cached_data["rag_results"],
-            "visa_answer": visa_answer,
-            "rag_degraded": False,
-            "rag_stale": stale,
-            "rag_tier": _SYNTHESIS_TIER,
-            "cache_source": "api",
-        }
+        cached_data = parse_json_dict(cached, context="rag_cache")
+        if "rag_results" in cached_data and "visa_answer" in cached_data:
+            logger.info("RAG: cache HIT for %s", _cache_key)
+            # Staleness is re-evaluated on every hit — cached answers age too
+            stale, warning = _staleness_warning(cached_data["rag_results"])
+            visa_answer = cached_data["visa_answer"]
+            if visa_answer and stale:
+                visa_answer += warning
+            return {
+                "rag_results": cached_data["rag_results"],
+                "visa_answer": visa_answer,
+                "rag_degraded": False,
+                "rag_stale": stale,
+                "rag_tier": _SYNTHESIS_TIER,
+                "cache_source": "api",
+            }
+        logger.warning("RAG: cache entry malformed for %s — refetching", _cache_key)
 
     # Fan-out: retrieve per sub-query through the Phase 2 pipeline.
     # Sequential by design — retrieval is local (fastembed + Qdrant filter)

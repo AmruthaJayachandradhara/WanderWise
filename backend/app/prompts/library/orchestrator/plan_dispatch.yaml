@@ -1,5 +1,5 @@
 prompt_id: orchestrator/plan_dispatch
-version: 1
+version: 2
 tier: large
 status: active
 description: >
@@ -13,7 +13,7 @@ template: |
   Available agents: travel_search, weather, rag
 
   Respond with valid JSON only — no markdown, no explanation:
-  {{"agents_needed": ["travel_search", "weather", "rag"]}}
+  {"agents_needed": ["travel_search", "weather", "rag"]}
 
   Rules:
   - Include travel_search if the query involves flights, hotels, or a trip.
@@ -39,6 +39,12 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-07-13
+    change: >
+      Fixed a doubled-brace typo in the JSON example — this prompt has
+      input_variables: [], so render() never calls .format() and the
+      double braces were literal text the model could echo verbatim.
   - version: 1
     date: 2026-06-22
     change: "Initial version — plan node agent dispatch."

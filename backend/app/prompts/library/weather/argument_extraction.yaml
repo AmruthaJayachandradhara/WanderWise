@@ -1,5 +1,5 @@
 prompt_id: weather/argument_extraction
-version: 1
+version: 2
 tier: small
 status: active
 description: >
@@ -10,7 +10,7 @@ description: >
 template: |
   Extract the destination city or region from the user's query.
   Respond with valid JSON only — no markdown, no explanation:
-  {{"location": "<city or region name>"}}
+  {"location": "<city or region name>"}
   If no location is mentioned, use location: "unknown".
 
 input_variables: []
@@ -29,6 +29,12 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-07-13
+    change: >
+      Fixed a doubled-brace typo in the JSON example — this prompt has
+      input_variables: [], so render() never calls .format() and the
+      double braces were literal text the model could echo verbatim.
   - version: 1
     date: 2026-06-22
     change: "Initial version — location extraction moved from router into weather agent."

@@ -7,12 +7,12 @@ to all three agents); agents_needed is metadata for traces only.
 Falls back to all three agents if the LLM response can't be parsed.
 """
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.llm.client import llm
+from backend.app.llm.parsing import parse_json_dict
 from backend.app.orchestrator.state import GraphState
 from backend.app.prompts.registry import get_prompt, render
 
@@ -45,15 +45,12 @@ def plan_node(state: GraphState) -> dict:
         HumanMessage(content=context),
     ]
 
-    response = llm.complete(_PLAN_TIER, messages)
+    response = llm.complete(_PLAN_TIER, messages, json_mode=True)
 
-    try:
-        parsed = json.loads(response.text.strip())
-        agents_needed = parsed.get("agents_needed", _DEFAULT_AGENTS)
-        if not isinstance(agents_needed, list) or not agents_needed:
-            agents_needed = _DEFAULT_AGENTS
-    except (json.JSONDecodeError, AttributeError):
-        logger.warning("Plan: failed to parse response, defaulting to all agents")
+    parsed = parse_json_dict(response.text.strip(), context="plan")
+    agents_needed = parsed.get("agents_needed", _DEFAULT_AGENTS)
+    if not isinstance(agents_needed, list) or not agents_needed:
+        logger.warning("Plan: agents_needed missing or invalid, defaulting to all agents")
         agents_needed = _DEFAULT_AGENTS
 
     # Decomposition-aware annotation (trace metadata; topology stays static):

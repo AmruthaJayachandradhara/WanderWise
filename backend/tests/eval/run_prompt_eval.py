@@ -126,7 +126,7 @@ def run_prompt(prompt_id: str) -> int:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=case["human_input"]),
             ]
-            response = llm.complete(p.tier, messages)
+            response = llm.complete(p.tier, messages, json_mode=bool(p.output_schema))
             output = response.text.strip()
         except Exception as exc:
             logger.error("FAIL [%s/%s]: exception — %s", prompt_id, case_id, exc)
