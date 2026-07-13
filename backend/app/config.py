@@ -30,9 +30,13 @@ class Settings(BaseSettings):
 
     # --- Phase 0 Locked Decisions ---
     # Model Tier Mappings
+    # "-latest" aliases auto-track Google's current Flash / Flash-Lite
+    # generation rather than pinning a dated model id that can be
+    # deprecated (gemini-2.5-flash started 404ing for this API key
+    # mid-Phase-4 — "no longer available to new users").
     MODEL_TIERS: Dict[str, str] = {
-        "small": "gemini-2.5-flash-lite",
-        "large": "gemini-2.5-flash"
+        "small": "gemini-flash-lite-latest",
+        "large": "gemini-flash-latest"
     }
     USE_GROQ_FALLBACK: bool = False
     
