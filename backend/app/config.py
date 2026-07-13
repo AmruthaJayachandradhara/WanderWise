@@ -75,6 +75,9 @@ class Settings(BaseSettings):
         "hotel": "duffel",
         "restaurant": "mock",
     }
+    # None = call the reservation service in-process via ASGI transport;
+    # set to e.g. http://reservation:8001 when it runs as its own container.
+    RESERVATION_SERVICE_URL: str | None = None
 
     # --- Cache TTLs in seconds (Phase 3) ---
     CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly

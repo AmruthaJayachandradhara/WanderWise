@@ -27,6 +27,7 @@ from backend.app.config import settings
 from backend.app.logging_config import setup_logging
 from backend.app.observability.tracing import init_tracing
 from backend.app.orchestrator.graph import graph
+from backend.app.reservation_service.service import app as reservation_app
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,12 @@ async def chat(request: ChatRequest):
         }
 
     return EventSourceResponse(event_stream())
+
+
+# --- Mock reservation service (Phase 4) ---
+# Mounted sub-app: live and curl-able on the deployed Space at /reservation,
+# same code that runs standalone in docker-compose.
+app.mount("/reservation", reservation_app)
 
 
 # --- Serve React static build ---

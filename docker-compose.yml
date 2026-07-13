@@ -8,3 +8,16 @@ services:
     environment:
       - FRONTEND_DIST_DIR=frontend/dist
     # Qdrant and Redis are added in Phase 2/3
+
+  # Mock reservation service as its own deployable (Phase 4). Optional:
+  # by default the backend calls it in-process; point the backend at this
+  # container with RESERVATION_SERVICE_URL=http://reservation:8001 to
+  # exercise the microservice topology locally.
+  reservation:
+    build: .
+    profiles: ["microservices"]
+    command: >
+      uv run uvicorn backend.app.reservation_service.service:app
+      --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
