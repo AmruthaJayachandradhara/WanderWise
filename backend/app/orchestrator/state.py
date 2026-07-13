@@ -56,6 +56,7 @@ class GraphState(TypedDict, total=False):
     visa_answer: str | None         # synthesised cited visa/advisory answer
     rag_tier: str                   # tier used by RAG synthesis
     rag_degraded: bool              # True if RAG pipeline degraded
+    rag_stale: bool                 # True if any retrieved chunk exceeded its staleness threshold (Phase 4)
 
     # --- Budget reasoning ---
     budget_breakdown: dict | None   # serialised BudgetBreakdown (or None)

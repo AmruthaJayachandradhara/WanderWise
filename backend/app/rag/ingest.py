@@ -64,16 +64,14 @@ def _ensure_collection(client: QdrantClient, name: str, vector_size: int) -> Non
         )
 
 
-def ingest_country(country_iso: str, passport: str = "US") -> int:
-    """Fetch, chunk, embed, and upsert travel data for one country.
+def fetch_country_sources(country_iso: str) -> tuple[list[tuple[str, str, str]], str | None]:
+    """Fetch raw source texts for one country.
 
-    Returns the number of chunks upserted. Idempotent: skips chunks
-    whose content_hash already exists in the collection.
+    Returns ([(collection_name, text, source_url)], advisory_level).
+    Shared by ingest_country and the Phase 4 staleness refresh, so both
+    always see identical source material for the hash comparison.
     """
-    client = _get_client()
     iso_lower = country_iso.lower()
-    last_verified = datetime.now(timezone.utc).isoformat()
-    total_upserted = 0
 
     # Fetch advisory page
     advisory_text = ""
@@ -116,6 +114,47 @@ def ingest_country(country_iso: str, passport: str = "US") -> int:
         ("advisories", advisory_text, _ADVISORY_URL.format(iso=iso_lower)),
         ("destination_guides", guide_text, _RESTCOUNTRIES_URL.format(iso=country_iso)),
     ]
+    return sources, advisory_level
+
+
+def build_point(
+    chunk_text_val: str,
+    vector: list[float],
+    *,
+    source_url: str,
+    country_iso: str,
+    passport: str,
+    advisory_level: str | None,
+    last_verified: str,
+) -> PointStruct:
+    """One chunk → one Qdrant point; the single place payloads are shaped."""
+    content_hash = hashlib.sha256(chunk_text_val.encode()).hexdigest()
+    return PointStruct(
+        id=int(content_hash[:8], 16),
+        vector=vector,
+        payload={
+            "text": chunk_text_val,
+            "source_url": source_url,
+            "country_iso": country_iso,
+            "passport_nationality": passport,
+            "advisory_level": advisory_level,
+            "last_verified": last_verified,
+            "content_hash": content_hash,
+        },
+    )
+
+
+def ingest_country(country_iso: str, passport: str = "US", client: QdrantClient | None = None) -> int:
+    """Fetch, chunk, embed, and upsert travel data for one country.
+
+    Returns the number of chunks upserted. Idempotent via content-addressed
+    point IDs: an unchanged chunk overwrites itself in place.
+    """
+    client = client or _get_client()
+    last_verified = datetime.now(timezone.utc).isoformat()
+    total_upserted = 0
+
+    sources, advisory_level = fetch_country_sources(country_iso)
 
     for collection_name, text, source_url in sources:
         if not text:
@@ -127,22 +166,18 @@ def ingest_country(country_iso: str, passport: str = "US") -> int:
             continue
 
         vectors = embed_texts(chunks)
-        points = []
-        for chunk_text_val, vector in zip(chunks, vectors):
-            content_hash = hashlib.sha256(chunk_text_val.encode()).hexdigest()
-            points.append(PointStruct(
-                id=int(content_hash[:8], 16),
-                vector=vector,
-                payload={
-                    "text": chunk_text_val,
-                    "source_url": source_url,
-                    "country_iso": country_iso,
-                    "passport_nationality": passport,
-                    "advisory_level": advisory_level,
-                    "last_verified": last_verified,
-                    "content_hash": content_hash,
-                },
-            ))
+        points = [
+            build_point(
+                chunk_text_val,
+                vector,
+                source_url=source_url,
+                country_iso=country_iso,
+                passport=passport,
+                advisory_level=advisory_level,
+                last_verified=last_verified,
+            )
+            for chunk_text_val, vector in zip(chunks, vectors)
+        ]
 
         if points:
             client.upsert(collection_name=collection_name, points=points)

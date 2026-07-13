@@ -90,6 +90,18 @@ class Settings(BaseSettings):
         "phone_number": "+14155550123",
     }
 
+    # --- RAG staleness (Phase 4) ---
+    # Data-version slug in RAG cache keys — bump (v1 → v2) to invalidate all
+    # cached RAG answers after a corpus change without a full cache flush.
+    RAG_DATA_VERSION: str = "v1"
+    # Max age in days per collection before answers carry a
+    # "verify before travel" warning; aligned with the reingest.yml cadence.
+    STALENESS_THRESHOLD_DAYS: Dict[str, int] = {
+        "advisories": 2,           # re-fetched daily
+        "visa_entry": 14,          # re-fetched weekly
+        "destination_guides": 60,  # re-fetched monthly
+    }
+
     # --- Cache TTLs in seconds (Phase 3) ---
     CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly
     CACHE_TTL_WEATHER: int = 3600        # 1h — forecast is reasonably fresh

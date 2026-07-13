@@ -42,6 +42,7 @@ class RetrievedChunk:
     country_iso: str
     last_verified: str
     advisory_level: str | None
+    collection: str = ""  # which collection it came from — drives staleness thresholds
 
 
 def _get_client() -> QdrantClient:
@@ -101,6 +102,7 @@ def _retrieve(query: str, country_iso: str, passport_nationality: str) -> list[R
                 country_iso=payload.get("country_iso", country_iso),
                 last_verified=payload.get("last_verified", ""),
                 advisory_level=payload.get("advisory_level"),
+                collection=collection_name,
             )
             # Dedup by content_hash, keeping the highest score
             if content_hash not in merged or chunk.score > merged[content_hash].score:

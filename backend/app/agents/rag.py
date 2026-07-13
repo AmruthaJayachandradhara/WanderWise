@@ -11,9 +11,11 @@ behaves exactly as before.
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from backend.app.config import settings
 from backend.app.llm.client import llm
 from backend.app.memory.cache import api_get, api_set
 from backend.app.orchestrator.state import GraphState
@@ -95,6 +97,30 @@ def _resolve_country_iso(location: str, query: str) -> str:
     return "US"
 
 
+def _staleness_warning(rag_results: list[dict]) -> tuple[bool, str]:
+    """Check retrieved chunks against per-collection staleness thresholds.
+
+    Returns (stale, warning_text). Computed at answer time — including on
+    cache hits — so a chunk that aged past its threshold always warns.
+    """
+    now = datetime.now(timezone.utc)
+    stale_dates = []
+    for r in rag_results:
+        threshold = settings.STALENESS_THRESHOLD_DAYS.get(r.get("collection", ""), 30)
+        try:
+            verified = datetime.fromisoformat(r.get("last_verified", ""))
+        except (TypeError, ValueError):
+            continue
+        if (now - verified).days > threshold:
+            stale_dates.append(r.get("last_verified", "")[:10])
+    if not stale_dates:
+        return False, ""
+    return True, (
+        f"\n\n⚠ Some of this information was last verified on {min(stale_dates)} "
+        "and may be out of date — verify before travel."
+    )
+
+
 def rag_node(state: GraphState) -> dict:
     """Retrieve per sub-query, then synthesise one merged, cited answer."""
     query = state.get("query", "")
@@ -124,17 +150,23 @@ def rag_node(state: GraphState) -> dict:
     # With one sub-query this key is identical to the Phase 3 format.
     _qhash = hashlib.sha256(query.encode()).hexdigest()[:12]
     _cache_key = (
-        f"rag:v1:{'-'.join(iso for _, iso, _ in subjects)}:"
+        f"rag:{settings.RAG_DATA_VERSION}:{'-'.join(iso for _, iso, _ in subjects)}:"
         f"{'-'.join(p for _, _, p in subjects)}:{_qhash}"
     )
     cached = api_get(_cache_key)
     if cached:
         logger.info("RAG: cache HIT for %s", _cache_key)
         cached_data = json.loads(cached)
+        # Staleness is re-evaluated on every hit — cached answers age too
+        stale, warning = _staleness_warning(cached_data["rag_results"])
+        visa_answer = cached_data["visa_answer"]
+        if visa_answer and stale:
+            visa_answer += warning
         return {
             "rag_results": cached_data["rag_results"],
-            "visa_answer": cached_data["visa_answer"],
+            "visa_answer": visa_answer,
             "rag_degraded": False,
+            "rag_stale": stale,
             "rag_tier": _SYNTHESIS_TIER,
             "cache_source": "api",
         }
@@ -160,6 +192,7 @@ def rag_node(state: GraphState) -> dict:
                 "country_iso": c.country_iso,
                 "last_verified": c.last_verified,
                 "advisory_level": c.advisory_level,
+                "collection": c.collection,
             }
             for c in chunks
         )
@@ -199,15 +232,21 @@ def rag_node(state: GraphState) -> dict:
         "RAG: synthesised answer from %d chunks across %d subject(s)",
         ref, len(sections),
     )
-    from backend.app.config import settings
+    # Cache the clean answer; the staleness warning is appended per-read
+    # so it reflects chunk age at answer time, not at cache time.
     api_set(
         _cache_key,
         json.dumps({"rag_results": rag_results, "visa_answer": visa_answer}),
         ttl=settings.CACHE_TTL_VISA_DOCS,
     )
+    stale, warning = _staleness_warning(rag_results)
+    if stale:
+        visa_answer += warning
+        logger.info("RAG: staleness warning attached")
     return {
         "rag_results": rag_results,
         "visa_answer": visa_answer,
         "rag_degraded": False,
+        "rag_stale": stale,
         "rag_tier": _SYNTHESIS_TIER,
     }

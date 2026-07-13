@@ -1,0 +1,67 @@
+# Scheduled staleness refresh (Phase 4).
+#
+# Runs OUTSIDE the web app (Phase 0 decision) so re-ingestion survives
+# free-tier Space sleep. One workflow, three cadences — the cron that fired
+# selects which collections to refresh. Only changed documents are
+# re-embedded (content-hash diff), keeping runs cheap on free minutes.
+
+name: reingest
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily    → advisories
+    - cron: "0 7 * * 1"   # weekly   → visa_entry
+    - cron: "0 8 1 * *"   # monthly  → destination_guides
+  workflow_dispatch:
+    inputs:
+      collections:
+        description: "Space-separated collections to refresh"
+        default: "advisories visa_entry destination_guides"
+      country:
+        description: "Single country ISO (empty = all 50)"
+        default: ""
+
+jobs:
+  reingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Cache fastembed model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-${{ hashFiles('pyproject.toml') }}
+
+      - name: Select collections for this trigger
+        id: select
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 6 * * *") echo "collections=advisories" >> "$GITHUB_OUTPUT" ;;
+            "0 7 * * 1") echo "collections=visa_entry" >> "$GITHUB_OUTPUT" ;;
+            "0 8 1 * *") echo "collections=destination_guides" >> "$GITHUB_OUTPUT" ;;
+            *) echo "collections=${{ github.event.inputs.collections }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Refresh corpus (changed documents only)
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: |
+          COUNTRY_ARG=""
+          if [ -n "${{ github.event.inputs.country }}" ]; then
+            COUNTRY_ARG="--country ${{ github.event.inputs.country }}"
+          fi
+          uv run python scripts/reingest.py \
+            --collections ${{ steps.select.outputs.collections }} $COUNTRY_ARG
