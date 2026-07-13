@@ -368,18 +368,6 @@ wheels = [
 ]
 
 [[package]]
-name = "duffel-api"
-version = "0.6.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/16/9b/d57c89203ad7c3de80fad45a9d0c6f86f6206adf4956b74bbbf49bb4c358/duffel-api-0.6.2.tar.gz", hash = "sha256:663aa5fd55379a75146a9dc86bc5144ea2895c37a9898edc4df3a0e65360ad53", size = 38434, upload-time = "2023-10-02T16:44:41.133Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/d6/21b17f1dfe215b176c2168ed17bdc66581a935f1fb7e253885f78ff3eae1/duffel_api-0.6.2-py3-none-any.whl", hash = "sha256:c60f09d0d76c7ee872060ff6722b146bc4c0022a9e573c0aab58ab8bd47bfc81", size = 68530, upload-time = "2023-10-02T16:44:39.281Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.137.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2531,7 +2519,6 @@ name = "wanderwise"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "duffel-api" },
     { name = "fastapi" },
     { name = "fastembed" },
     { name = "httpx" },
@@ -2560,7 +2547,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duffel-api", specifier = ">=0.6.2" },
     { name = "fastapi", specifier = ">=0.137.0" },
     { name = "fastembed", specifier = ">=0.3.6" },
     { name = "httpx", specifier = ">=0.28.1" },

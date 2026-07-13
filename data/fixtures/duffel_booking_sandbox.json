@@ -1,0 +1,49 @@
+{
+  "search_offer": {
+    "offer_id": "off_0000B8IhUUrBVxexZ6LQV0",
+    "booking_type": "flight",
+    "description": "Duffel Airways 2026-08-15T10:50:00 \u2192 2026-08-15T13:48:00",
+    "price": 224.92,
+    "currency": "USD",
+    "metadata": {
+      "offer_id": "off_0000B8IhUUrBVxexZ6LQV0",
+      "price": 224.92,
+      "currency": "USD",
+      "carrier": "Duffel Airways",
+      "departure_at": "2026-08-15T10:50:00",
+      "arrival_at": "2026-08-15T13:48:00",
+      "duration_minutes": 478,
+      "stops": 0
+    }
+  },
+  "check": {
+    "offer_id": "off_0000B8IhUUrBVxexZ6LQV0",
+    "available": true,
+    "price": 224.92,
+    "currency": "USD",
+    "detail": ""
+  },
+  "reservation": {
+    "reservation_id": "ord_0000B8IhUkq9lOVCaWNOHw",
+    "offer_id": "off_0000B8IhUUrBVxexZ6LQV0",
+    "booking_type": "flight",
+    "status": "confirmed",
+    "provider": "duffel",
+    "details": {
+      "booking_reference": "CAZXJS",
+      "amount": "224.92",
+      "currency": "USD"
+    }
+  },
+  "confirmation": {
+    "confirmation_id": "CAZXJS",
+    "reservation_id": "ord_0000B8IhUkq9lOVCaWNOHw",
+    "status": "confirmed",
+    "provider": "duffel"
+  },
+  "cancellation": {
+    "reservation_id": "ord_0000B8IhUkq9lOVCaWNOHw",
+    "status": "cancelled",
+    "provider": "duffel"
+  }
+}

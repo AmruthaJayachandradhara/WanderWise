@@ -122,15 +122,17 @@ def test_travel_search_node_degraded_path(monkeypatch):
     assert result["travel_search_tier"] == "small"
 
 
-def test_base_tool_wraps_run_exception():
+def test_base_tool_wraps_run_exception(monkeypatch):
     """DuffelFlightTool.run() returns degraded result when _run raises — never re-raises."""
+    # Force the no-key path even when a real .env key is present locally
+    monkeypatch.setattr("backend.app.tools.duffel.settings.DUFFEL_API_KEY", None)
     tool = DuffelFlightTool()
     inp = DuffelFlightInput(
         origin="SFO",
         destination="TYO",
         departure_date="2026-07-25",
     )
-    # DUFFEL_API_KEY is None in test env → _run raises ValueError
+    # No DUFFEL_API_KEY → duffel_headers() raises ValueError inside _run
     result = tool.run(inp)
 
     assert result.success is False

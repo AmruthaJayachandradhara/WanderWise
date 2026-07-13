@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     # None = call the reservation service in-process via ASGI transport;
     # set to e.g. http://reservation:8001 when it runs as its own container.
     RESERVATION_SERVICE_URL: str | None = None
+    # Demo traveller used for Duffel sandbox orders (no real identity/money).
+    BOOKING_PASSENGER: Dict[str, str] = {
+        "title": "ms",
+        "given_name": "Amelia",
+        "family_name": "Wanderer",
+        "gender": "f",
+        "born_on": "1995-06-15",
+        "email": "demo@wanderwise.example",
+        "phone_number": "+14155550123",
+    }
 
     # --- Cache TTLs in seconds (Phase 3) ---
     CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly
