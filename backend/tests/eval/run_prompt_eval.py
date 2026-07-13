@@ -179,7 +179,7 @@ def run_prompt(prompt_id: str) -> int:
 
 def main() -> int:
     if len(sys.argv) > 1:
-        prompt_ids = [sys.argv[1]]
+        prompt_ids = sys.argv[1:]
     else:
         prompt_ids = _discover_all_prompts()
         logger.info("Discovered %d active prompt(s)", len(prompt_ids))

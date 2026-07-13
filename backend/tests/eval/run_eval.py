@@ -17,9 +17,20 @@ Phase 3 checks:
  10. False-block rate < 5% across all legitimate cases.
  11. expect_no_exception=true → no unhandled exception (fault-tolerance check).
 
+Phase 4 checks:
+ 12. A run that hits the confirmation gate (interrupt()) is auto-approved so
+     the eval can observe the post-booking state — real graph runs still
+     require an explicit human decision; the eval harness stands in for one.
+ 13. expected_min_sub_queries → decomposition fan-out width (query decomposition).
+ 14. expected_confirmation=true → confirmation_id present and the
+     no-hallucinated-booking guardrail did not fire (booking-gate narrative).
+
 Blocked-case shortcut: for cases where expected_blocked=true we verify the
 verdict and skip the router/assemble/summary checks (those nodes never run
 for a blocked input — skipping them is correct, not a gap).
+
+ci_skip cases are excluded by default (kept out of the CI-gating smoke set
+to conserve free-tier LLM quota) — pass --all to include them locally.
 
 LLM-judge eval (grounding, faithfulness) is Phase 5; deterministic checks
 are cheap and CI-safe.
@@ -28,12 +39,15 @@ Exits non-zero if any case fails OR if aggregate block/false-block rates
 miss their thresholds.
 """
 
+import argparse
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
+
+from langgraph.types import Command
 
 from backend.app.logging_config import setup_logging
 from backend.app.observability.tracing import init_tracing
@@ -60,9 +74,13 @@ FALSE_BLOCK_RATE_MAX = 0.05  # < 5% of legitimate inputs may be blocked
 _DEGRADED_STUB_MARKER = "[Service temporarily unavailable."
 
 
-def run_eval() -> int:
+def run_eval(include_ci_skip: bool = False) -> int:
     """Run all eval cases. Returns the number of failures."""
-    cases = [json.loads(line) for line in DATASET_PATH.read_text().splitlines() if line.strip()]
+    all_cases = [json.loads(line) for line in DATASET_PATH.read_text().splitlines() if line.strip()]
+    cases = [c for c in all_cases if include_ci_skip or not c.get("ci_skip")]
+    skipped_ci = len(all_cases) - len(cases)
+    if skipped_ci:
+        logger.info("Skipping %d ci_skip case(s) (pass --all to include locally)", skipped_ci)
     logger.info("Running %d eval cases", len(cases))
 
     failures = 0
@@ -80,6 +98,7 @@ def run_eval() -> int:
             time.sleep(30)
         case_id = case["id"]
         logger.info("--- Case: %s ---", case_id)
+        config = {"configurable": {"thread_id": f"eval-{case_id}"}}
 
         try:
             result = graph.invoke(
@@ -88,21 +107,14 @@ def run_eval() -> int:
                     "query": case["query"],
                 },
                 # Checkpointer (Phase 4) requires a thread per invocation
-                config={"configurable": {"thread_id": f"eval-{case_id}"}},
+                config=config,
             )
-        except KeyError as exc:
-            # TODO(phase-4): trace and fix the graph node that lacks KeyError
-            # handling. Under free-tier 429 quota exhaustion the LLM can return
-            # a bare JSON string instead of an object; if a node's try/except
-            # doesn't catch AttributeError from .get() on that string, or if a
-            # node does direct subscript access, a KeyError escapes graph.invoke().
-            # Treat as degraded (app is running) rather than a hard failure.
-            logger.warning(
-                "DEGRADED [%s]: KeyError in graph (%s) — likely non-dict LLM "
-                "response from quota-limited call; skipping (not counted as failure)",
-                case_id, exc,
-            )
-            continue
+            if "__interrupt__" in result:
+                # Auto-approve so the eval can observe post-booking state.
+                # A real run only proceeds past the gate on an explicit human
+                # decision — the eval harness stands in for one here.
+                logger.info("[%s]: confirmation gate hit — auto-approving", case_id)
+                result = graph.invoke(Command(resume={"approved": True}), config=config)
         except Exception as exc:
             logger.error("FAIL [%s]: unhandled exception — %s", case_id, exc)
             failures += 1
@@ -215,6 +227,37 @@ def run_eval() -> int:
                     failures += 1
                     case_failed = True
 
+        # ── Phase 4: decomposition fan-out width ────────────────────────────
+        if "expected_min_sub_queries" in case:
+            n = len(result.get("sub_queries") or [])
+            if n < case["expected_min_sub_queries"]:
+                logger.error(
+                    "FAIL [%s]: expected >= %d sub_queries, got %d",
+                    case_id, case["expected_min_sub_queries"], n,
+                )
+                failures += 1
+                case_failed = True
+
+        # ── Phase 4: booking-gate narrative — real confirmation flows through
+        if case.get("expected_confirmation"):
+            confirmation_id = result.get("confirmation_id")
+            output_v = result.get("output_verdict", {})
+            if not confirmation_id:
+                logger.error(
+                    "FAIL [%s]: expected a confirmation_id after gate approval, got none",
+                    case_id,
+                )
+                failures += 1
+                case_failed = True
+            if "no_hallucinated_booking" in output_v.get("failed_checks", []):
+                logger.error(
+                    "FAIL [%s]: no-hallucinated-booking gate fired despite a real "
+                    "confirmation_id=%r",
+                    case_id, confirmation_id,
+                )
+                failures += 1
+                case_failed = True
+
         # ── Phase 3: output guardrail passed (no ungrounded/schema failure) ─
         if not case_failed:
             output_v = result.get("output_verdict", {})
@@ -283,5 +326,13 @@ def run_eval() -> int:
 
 
 if __name__ == "__main__":
-    n_failures = run_eval()
+    parser = argparse.ArgumentParser(description="Run the graph eval gate")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Include ci_skip cases (decomposition/booking narratives) — local use, "
+        "not run in CI to conserve free-tier LLM quota.",
+    )
+    args = parser.parse_args()
+    n_failures = run_eval(include_ci_skip=args.all)
     sys.exit(1 if n_failures else 0)

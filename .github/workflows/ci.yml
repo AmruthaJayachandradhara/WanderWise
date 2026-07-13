@@ -56,15 +56,16 @@ jobs:
       - name: Run pytest
         run: uv run pytest backend/tests/unit/ -v --tb=short
 
-      # Smoke: run only the router prompt (3 cases) to stay within free-tier
-      # quota. Full per-prompt eval across all 13 prompts will be re-enabled
-      # in Phase 5 once a fallback provider (Groq / cached) is wired in.
+      # Smoke: run only router_intent + decompose_query (small-tier, ~8 cases
+      # total) to stay within free-tier quota. Full per-prompt eval across
+      # all prompts will be re-enabled in Phase 5 once a fallback provider
+      # (Groq / cached) is wired in.
       - name: Run per-prompt eval gate (smoke)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LANGSMITH_TRACING: "false"
           TRACE_SAMPLING: "0"
-        run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_intent
+        run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_intent orchestrator/decompose_query
 
       # Give Gemini free-tier quota (10 RPM) time to recover after the
       # per-prompt eval calls before hitting the graph eval.
