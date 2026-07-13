@@ -14,13 +14,13 @@ error) degrades to an empty list so the RAG agent can carry on.
 """
 
 import logging
-import os
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+from backend.app.config import settings
 from backend.app.llm.client import llm
 from backend.app.prompts.registry import render
 from backend.app.rag.collections import COLLECTION_CONFIGS
@@ -46,10 +46,8 @@ class RetrievedChunk:
 
 
 def _get_client() -> QdrantClient:
-    url = os.getenv("QDRANT_URL")
-    if url:
-        api_key = os.getenv("QDRANT_API_KEY")
-        return QdrantClient(url=url, api_key=api_key)
+    if settings.QDRANT_URL:
+        return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
     return QdrantClient(":memory:")
 
 

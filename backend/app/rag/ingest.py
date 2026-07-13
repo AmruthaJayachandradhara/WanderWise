@@ -12,13 +12,13 @@ offline unit tests without a live vector DB.
 import hashlib
 import html.parser
 import logging
-import os
 from datetime import datetime, timezone
 
 import httpx
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from backend.app.config import settings
 from backend.app.rag.collections import COLLECTION_CONFIGS, chunk_text
 from backend.app.rag.embeddings import embed_texts
 
@@ -48,10 +48,8 @@ def _strip_html(raw: str) -> str:
 
 
 def _get_client() -> QdrantClient:
-    url = os.getenv("QDRANT_URL")
-    if url:
-        api_key = os.getenv("QDRANT_API_KEY")
-        return QdrantClient(url=url, api_key=api_key)
+    if settings.QDRANT_URL:
+        return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
     return QdrantClient(":memory:")
 
 
