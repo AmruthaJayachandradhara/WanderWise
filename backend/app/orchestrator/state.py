@@ -100,6 +100,13 @@ class GraphState(TypedDict, total=False):
     confirmations: list[dict]        # all confirmed reservations this run
     confirmation_id: str | None      # primary confirmation (read by output guardrail)
 
+    # --- Activities (Phase 4) ---
+    restaurants: list[dict] | None   # Overpass restaurant results
+    events: list[dict] | None        # Ticketmaster events (deep links only)
+    selected_restaurant: dict | None # proposed reservation {venue_id, name, slot, ...}
+    activities_degraded: bool        # True if both search sources degraded
+    activities_tier: str             # tier used for selection reasoning
+
     # --- Actions & confirmation gate (Phase 4) ---
     booking_requested: bool          # query asked to book (set by decompose)
     pending_actions: list[dict]      # queued high-risk actions awaiting the gate

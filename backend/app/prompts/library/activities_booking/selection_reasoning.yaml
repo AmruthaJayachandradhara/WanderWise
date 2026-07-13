@@ -1,0 +1,54 @@
+prompt_id: activities_booking/selection_reasoning
+version: 1
+tier: large
+status: active
+description: >
+  Picks the best restaurant candidate for a reservation from the Overpass
+  search results, reasoning over the traveller's interests, cuisine
+  preference, and trip dates. The chosen venue is queued as a pending
+  reservation — it is NOT booked here; booking happens only after the
+  confirmation gate.
+
+template: |
+  You are a travel concierge choosing ONE restaurant to reserve for the
+  traveller, from the candidate list in the context.
+
+  Rules:
+  - Choose only from the provided candidates; copy venue_id exactly.
+  - Prefer venues matching the stated cuisine or the traveller's interests.
+  - slot: pick a dinner time (19:00 local) on a sensible trip date — the
+    first evening after arrival when arrival information is provided.
+    Format: YYYY-MM-DDTHH:MM.
+  - Do not claim the reservation is made; you are only proposing it.
+  Respond with valid JSON only — no markdown, no explanation:
+  {"venue_id": "<id from candidates>", "name": "<venue name>", "slot": "YYYY-MM-DDTHH:MM", "party_size": <int>, "reason": "<one sentence>"}
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    venue_id:
+      type: string
+    name:
+      type: string
+    slot:
+      type: string
+    party_size:
+      type: integer
+    reason:
+      type: string
+  required:
+    - venue_id
+    - name
+    - slot
+
+eval:
+  dataset: tests/eval/cases/activities_booking/selection_reasoning.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-07-13
+    change: "Phase 4 Step 6 — restaurant selection reasoning."

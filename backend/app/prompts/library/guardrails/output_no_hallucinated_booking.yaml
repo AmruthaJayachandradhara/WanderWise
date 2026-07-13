@@ -35,7 +35,7 @@ template: |
   {assistant_output}
 
   Respond with valid JSON only:
-  {"booking_claimed": <true|false>, "hallucinated": <true|false>, "reason": "<one sentence>"}
+  {{"booking_claimed": <true|false>, "hallucinated": <true|false>, "reason": "<one sentence>"}}
 
   hallucinated=true only when booking_claimed=true AND confirmation_status is "none".
 

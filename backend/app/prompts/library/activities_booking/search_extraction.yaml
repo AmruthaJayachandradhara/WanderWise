@@ -1,0 +1,43 @@
+prompt_id: activities_booking/search_extraction
+version: 1
+tier: small
+status: active
+description: >
+  Extracts activity search parameters (cuisine preference, event interest
+  keyword, party size) from the user's travel query + profile interests.
+  Consumed by the activities_booking node to call the places/events tools.
+
+template: |
+  You are a travel assistant. Extract activity search parameters from the
+  user's query and interests.
+  - cuisine: a single cuisine keyword for restaurant search (e.g. "sushi",
+    "italian") or null if no food preference is stated or implied.
+  - event_keyword: a single interest keyword for event search (e.g. "jazz",
+    "baseball") or null if none applies.
+  - party_size: number of diners; default 2 if unstated.
+  Respond with valid JSON only — no markdown, no explanation:
+  {"cuisine": "<keyword or null>", "event_keyword": "<keyword or null>", "party_size": <int>}
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    cuisine:
+      type: ["string", "null"]
+    event_keyword:
+      type: ["string", "null"]
+    party_size:
+      type: integer
+  required:
+    - party_size
+
+eval:
+  dataset: tests/eval/cases/activities_booking/search_extraction.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-07-13
+    change: "Phase 4 Step 6 — activity search argument extraction."

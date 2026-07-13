@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # None = call the reservation service in-process via ASGI transport;
     # set to e.g. http://reservation:8001 when it runs as its own container.
     RESERVATION_SERVICE_URL: str | None = None
+    OVERPASS_BASE_URL: str = "https://overpass-api.de/api/interpreter"
     # Demo traveller used for Duffel sandbox orders (no real identity/money).
     BOOKING_PASSENGER: Dict[str, str] = {
         "title": "ms",
@@ -93,6 +94,7 @@ class Settings(BaseSettings):
     CACHE_TTL_VISA_DOCS: int = 86400     # 24h — visa rules change slowly
     CACHE_TTL_WEATHER: int = 3600        # 1h — forecast is reasonably fresh
     CACHE_TTL_FLIGHTS: int = 0           # 0 = never cache prices
+    CACHE_TTL_PLACES: int = 86400        # 24h — OSM venues change slowly (Phase 4)
     CACHE_SEMANTIC_SIMILARITY_THRESHOLD: float = 0.92
 
     # --- App & Deployment ---

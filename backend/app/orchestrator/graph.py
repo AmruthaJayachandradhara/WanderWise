@@ -31,6 +31,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from backend.app.agents.action import action_node
+from backend.app.agents.activities_booking import activities_node
 from backend.app.agents.rag import rag_node
 from backend.app.agents.travel_search import travel_search_node
 from backend.app.agents.weather import weather_node
@@ -67,6 +68,7 @@ def build_graph():
     builder.add_node("travel_search", travel_search_node)
     builder.add_node("weather", weather_node)
     builder.add_node("rag", rag_node)
+    builder.add_node("activities", activities_node)
     builder.add_node("budget", budget_node)
     builder.add_node("action", action_node)
     builder.add_node("confirmation_gate", confirmation_gate_node)
@@ -99,15 +101,17 @@ def build_graph():
 
     builder.add_edge("router", "plan")
 
-    # Fan-out: plan dispatches all three agents in parallel
+    # Fan-out: plan dispatches all four agents in parallel
     builder.add_edge("plan", "travel_search")
     builder.add_edge("plan", "weather")
     builder.add_edge("plan", "rag")
+    builder.add_edge("plan", "activities")
 
-    # Fan-in: budget waits for all three
+    # Fan-in: budget waits for all four
     builder.add_edge("travel_search", "budget")
     builder.add_edge("weather", "budget")
     builder.add_edge("rag", "budget")
+    builder.add_edge("activities", "budget")
 
     # Action layer: calendar hold always; high-risk actions hit the gate
     builder.add_edge("budget", "action")

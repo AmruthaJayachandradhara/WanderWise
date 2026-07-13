@@ -1,0 +1,3 @@
+{"id": "extract-sushi-dinner", "inputs": {}, "human_input": "Query: Plan a Tokyo trip for two — we'd love a great sushi dinner and maybe a baseball game.\nInterests: food, sports", "description": "Cuisine + event keyword + party size all present"}
+{"id": "extract-no-preferences", "inputs": {}, "human_input": "Query: Week in Paris in September.\nInterests: history", "description": "No food/event preference stated — nulls expected, party_size defaults"}
+{"id": "extract-solo-jazz", "inputs": {}, "human_input": "Query: Solo trip to New Orleans, I want live jazz every night.\nInterests: music", "description": "Solo traveller with event keyword, no cuisine"}

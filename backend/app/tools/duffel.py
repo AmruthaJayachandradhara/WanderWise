@@ -11,13 +11,13 @@ the orchestrator handles unavailability gracefully.
 
 import logging
 import re
-import time
 
 import httpx
 from pydantic import BaseModel
 
 from backend.app.config import settings
 from backend.app.tools.base import BaseTool
+from backend.app.tools.geo import geocode
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,6 @@ class DuffelFlightTool(BaseTool[DuffelFlightInput, DuffelFlightOffers]):
 # Stays tool
 # ---------------------------------------------------------------------------
 
-_NOMINATIM_UA = "WanderWise/0.1 (portfolio-project; amruthajayachandra.dhara@gmail.com)"
 _MAX_STAYS = 10
 
 
@@ -177,7 +176,7 @@ class DuffelStaysTool(BaseTool[DuffelStaysInput, DuffelStaysOffers]):
     latency_budget_s: float = 15.0
 
     def _run(self, input: DuffelStaysInput) -> DuffelStaysOffers:  # noqa: A002
-        lat, lon = self._geocode(input.destination)
+        lat, lon = geocode(input.destination)
 
         payload = {
             "data": {
@@ -235,20 +234,6 @@ class DuffelStaysTool(BaseTool[DuffelStaysInput, DuffelStaysOffers]):
             len(offers), input.destination, input.check_in, input.check_out,
         )
         return DuffelStaysOffers(offers=offers)
-
-    def _geocode(self, city: str) -> tuple[float, float]:
-        time.sleep(1)  # Nominatim 1 req/sec policy
-        with httpx.Client(timeout=10) as client:
-            resp = client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": city, "format": "json", "limit": 1},
-                headers={"User-Agent": _NOMINATIM_UA},
-            )
-            resp.raise_for_status()
-        results = resp.json()
-        if not results:
-            raise ValueError(f"Location not found: {city!r}")
-        return float(results[0]["lat"]), float(results[0]["lon"])
 
     @staticmethod
     def _night_count(check_in: str, check_out: str) -> int:
