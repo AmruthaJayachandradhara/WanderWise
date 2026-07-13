@@ -14,12 +14,14 @@ tools, guardrails, and retries, and streaming partials hides that latency.
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from langgraph.types import Command
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -55,55 +57,93 @@ async def health() -> JSONResponse:
 
 class ChatRequest(BaseModel):
     query: str
-    user_id: str | None = None  # defaults to demo user; auth-ready seam
+    user_id: str | None = None    # defaults to demo user; auth-ready seam
+    thread_id: str | None = None  # checkpoint thread; generated if absent
+
+
+class ResumeRequest(BaseModel):
+    thread_id: str
+    approved: bool
+
+
+async def _stream_graph(graph_input, thread_id: str) -> AsyncGenerator[dict, None]:
+    """Stream one graph run (fresh or resumed) as SSE events.
+
+    Emits `progress` per node, `interrupt` when the confirmation gate
+    pauses the run (stream ends — resume via POST /api/chat/resume), and
+    `done` with the accumulated state otherwise.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    accumulated: dict = {}
+
+    # stream_mode="updates" yields {node_name: {key: value, ...}} per step
+    async for chunk in graph.astream(graph_input, config=config, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            payload = chunk["__interrupt__"][0].value
+            yield {
+                "event": "interrupt",
+                "data": json.dumps({
+                    "thread_id": thread_id,
+                    "pending_actions": payload.get("pending_actions", []),
+                    "email_draft": payload.get("email_draft"),
+                }),
+            }
+            return  # run is paused at the checkpoint — no "done" yet
+        for node_name, node_output in chunk.items():
+            if node_output:
+                accumulated.update(node_output)
+                yield {
+                    "event": "progress",
+                    "data": json.dumps({"node": node_name, "status": "done"}),
+                }
+
+    yield {
+        "event": "done",
+        "data": json.dumps({
+            "thread_id": thread_id,
+            "summary": accumulated.get("summary", ""),
+            "location": accumulated.get("location", ""),
+            "router_tier": accumulated.get("router_tier", ""),
+            "assemble_tier": accumulated.get("assemble_tier", ""),
+            "degraded": accumulated.get("degraded", False),
+            "flights": accumulated.get("flights"),
+            "flights_degraded": accumulated.get("flights_degraded", False),
+            "hotels": accumulated.get("hotels"),
+            "hotels_degraded": accumulated.get("hotels_degraded", False),
+            "visa_answer": accumulated.get("visa_answer"),
+            "rag_degraded": accumulated.get("rag_degraded", False),
+            "budget_breakdown": accumulated.get("budget_breakdown"),
+            "selected_flight": accumulated.get("selected_flight"),
+            "selected_hotel": accumulated.get("selected_hotel"),
+            "confirmations": accumulated.get("confirmations"),
+            "calendar_ics": accumulated.get("calendar_ics"),
+            "email_draft": accumulated.get("email_draft"),
+            "email_status": accumulated.get("email_status", "none"),
+        }),
+    }
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    """Stream graph progress events followed by a final 'done' event."""
+    """Stream graph progress events; pauses at the confirmation gate."""
     user_id = request.user_id or settings.DEMO_USER_ID
+    thread_id = request.thread_id or uuid.uuid4().hex
 
-    async def event_stream() -> AsyncGenerator[dict, None]:
-        initial_state = {
-            "user_id": user_id,
-            "query": request.query,
-        }
+    initial_state = {
+        "user_id": user_id,
+        "query": request.query,
+    }
+    return EventSourceResponse(_stream_graph(initial_state, thread_id))
 
-        # Accumulate state updates so we can emit the final "done" event
-        # without running the graph a second time.
-        accumulated: dict = {}
 
-        # stream_mode="updates" yields {node_name: {key: value, ...}} per step
-        async for chunk in graph.astream(initial_state, stream_mode="updates"):
-            for node_name, node_output in chunk.items():
-                if node_output:
-                    accumulated.update(node_output)
-                    yield {
-                        "event": "progress",
-                        "data": json.dumps({"node": node_name, "status": "done"}),
-                    }
-
-        yield {
-            "event": "done",
-            "data": json.dumps({
-                "summary": accumulated.get("summary", ""),
-                "location": accumulated.get("location", ""),
-                "router_tier": accumulated.get("router_tier", ""),
-                "assemble_tier": accumulated.get("assemble_tier", ""),
-                "degraded": accumulated.get("degraded", False),
-                "flights": accumulated.get("flights"),
-                "flights_degraded": accumulated.get("flights_degraded", False),
-                "hotels": accumulated.get("hotels"),
-                "hotels_degraded": accumulated.get("hotels_degraded", False),
-                "visa_answer": accumulated.get("visa_answer"),
-                "rag_degraded": accumulated.get("rag_degraded", False),
-                "budget_breakdown": accumulated.get("budget_breakdown"),
-                "selected_flight": accumulated.get("selected_flight"),
-                "selected_hotel": accumulated.get("selected_hotel"),
-            }),
-        }
-
-    return EventSourceResponse(event_stream())
+@app.post("/api/chat/resume")
+async def chat_resume(request: ResumeRequest):
+    """Resume a run paused at the confirmation gate with the user's decision."""
+    logger.info(
+        "Resuming thread %s: approved=%s", request.thread_id, request.approved
+    )
+    command = Command(resume={"approved": request.approved})
+    return EventSourceResponse(_stream_graph(command, request.thread_id))
 
 
 # --- Mock reservation service (Phase 4) ---

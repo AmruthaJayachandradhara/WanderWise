@@ -1,26 +1,36 @@
 """LangGraph orchestration graph.
 
-Phase 3 topology:
+Phase 4 topology:
   START → memory → input_guardrail → (blocked? → refusal → END)
+                                   → cache_lookup → (hit → output_guardrail)
                                    → router → plan
                                            → [travel_search ∥ weather ∥ rag]
-                                           → budget → assemble
-                                                    → output_guardrail
-                                                    → ok → END
+                                           → budget → action
+                                                    → (no pending) → assemble
+                                                    → confirmation_gate   ← interrupt()
+                                                       → approved → booking_execution → assemble
+                                                       → declined → assemble
+                                           → assemble → output_guardrail
+                                                    → ok → session_update → END
                                                     → reflect (≤2) → reflection
                                                                    → output_guardrail  ← cycle
 
-input_guardrail: topicality + injection + PII; blocks before any agent runs.
-output_guardrail: schema + budget (deterministic) + grounding (LLM judge);
-                  on failure routes to reflection for critique-and-fix.
-reflection:       large-tier critic; corrects output, loops back to output_guardrail;
-                  capped at GUARDRAIL_MAX_REFLECTION_ATTEMPTS (default 2).
+input_guardrail:  topicality + injection + PII; blocks before any agent runs.
+confirmation_gate: graph-edge human-in-the-loop — high-risk actions (booking,
+                  email) pause the run at a checkpoint until the user resumes
+                  with approve/decline. Requires the checkpointer + thread_id.
+booking_execution: the ONLY node that executes a BookingProvider; sole writer
+                  of confirmation_id (the no-hallucinated-booking gate's key).
+output_guardrail: schema + budget + booking (deterministic) + grounding (LLM
+                  judge); on failure routes to reflection for critique-and-fix.
 """
 
 import logging
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from backend.app.agents.action import action_node
 from backend.app.agents.rag import rag_node
 from backend.app.agents.travel_search import travel_search_node
 from backend.app.agents.weather import weather_node
@@ -31,6 +41,12 @@ from backend.app.memory.session import load_profile_node
 from backend.app.memory.summary import session_update_node
 from backend.app.orchestrator.nodes.assemble import assemble_node
 from backend.app.orchestrator.nodes.budget import budget_node
+from backend.app.orchestrator.nodes.confirmation import (
+    booking_execution_node,
+    confirmation_gate_node,
+    route_action,
+    route_confirmation,
+)
 from backend.app.orchestrator.nodes.plan import plan_node
 from backend.app.orchestrator.nodes.reflection import reflection_node
 from backend.app.orchestrator.router import router_node
@@ -52,6 +68,9 @@ def build_graph():
     builder.add_node("weather", weather_node)
     builder.add_node("rag", rag_node)
     builder.add_node("budget", budget_node)
+    builder.add_node("action", action_node)
+    builder.add_node("confirmation_gate", confirmation_gate_node)
+    builder.add_node("booking_execution", booking_execution_node)
     builder.add_node("assemble", assemble_node)
     builder.add_node("cache_lookup", cache_lookup_node)
     builder.add_node("output_guardrail", output_guardrail_node)
@@ -90,7 +109,21 @@ def build_graph():
     builder.add_edge("weather", "budget")
     builder.add_edge("rag", "budget")
 
-    builder.add_edge("budget", "assemble")
+    # Action layer: calendar hold always; high-risk actions hit the gate
+    builder.add_edge("budget", "action")
+    builder.add_conditional_edges(
+        "action",
+        route_action,
+        {"confirm": "confirmation_gate", "skip": "assemble"},
+    )
+    # The gate interrupts; on resume the user's decision routes execution
+    builder.add_conditional_edges(
+        "confirmation_gate",
+        route_confirmation,
+        {"execute": "booking_execution", "skip": "assemble"},
+    )
+    builder.add_edge("booking_execution", "assemble")
+
     builder.add_edge("assemble", "output_guardrail")
 
     # Conditional: ok → session_update → END; reflect → reflection ↩ output_guardrail
@@ -104,10 +137,14 @@ def build_graph():
     # Close the loop: reflection writes corrected output, re-validates
     builder.add_edge("reflection", "output_guardrail")
 
-    graph = builder.compile()
+    # Checkpointer enables the confirmation-gate interrupt/resume cycle.
+    # In-memory is deliberate: pending confirmations are ephemeral, and the
+    # deploy target is a single container. Every invoke now needs a thread_id.
+    graph = builder.compile(checkpointer=InMemorySaver())
     logger.info(
         "Graph compiled: START → memory → input_guardrail → (refuse|ok) → "
-        "router → plan → [travel_search ∥ weather ∥ rag] → budget → assemble "
+        "router → plan → [travel_search ∥ weather ∥ rag] → budget → action "
+        "→ (gate ⇢ booking_execution)? → assemble "
         "→ output_guardrail ⟷ reflection (≤%d) → END",
         2,
     )

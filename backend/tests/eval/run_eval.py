@@ -82,10 +82,14 @@ def run_eval() -> int:
         logger.info("--- Case: %s ---", case_id)
 
         try:
-            result = graph.invoke({
-                "user_id": "eval-user",
-                "query": case["query"],
-            })
+            result = graph.invoke(
+                {
+                    "user_id": "eval-user",
+                    "query": case["query"],
+                },
+                # Checkpointer (Phase 4) requires a thread per invocation
+                config={"configurable": {"thread_id": f"eval-{case_id}"}},
+            )
         except KeyError as exc:
             # TODO(phase-4): trace and fix the graph node that lacks KeyError
             # handling. Under free-tier 429 quota exhaustion the LLM can return

@@ -99,3 +99,12 @@ class GraphState(TypedDict, total=False):
     # no-hallucinated-booking guardrail gates summaries on their presence.
     confirmations: list[dict]        # all confirmed reservations this run
     confirmation_id: str | None      # primary confirmation (read by output guardrail)
+
+    # --- Actions & confirmation gate (Phase 4) ---
+    booking_requested: bool          # query asked to book (set by decompose)
+    pending_actions: list[dict]      # queued high-risk actions awaiting the gate
+    actions_approved: bool | None    # user decision from the interrupt
+    calendar_ics: str | None         # auto-generated .ics hold (low-risk)
+    email_draft: dict | None         # {subject, body} — drafted, never auto-sent
+    email_status: str                # "none" | "drafted" | "approved" | "discarded"
+    action_tier: str                 # tier used by the action agent

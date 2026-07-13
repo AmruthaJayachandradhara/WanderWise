@@ -1,0 +1,52 @@
+prompt_id: action/email_drafting
+version: 1
+tier: large
+status: active
+description: >
+  Drafts the itinerary + booking-summary email for the Action agent.
+
+  High-risk half of the risk tiering: the draft is NEVER sent by this
+  prompt or its caller — it is held at the graph-edge confirmation gate
+  and only released on explicit user approval. The draft must therefore
+  describe bookings as "ready to confirm", never as already made (the
+  no-hallucinated-booking guardrail also enforces this downstream).
+
+template: |
+  You are drafting a trip-summary email for a travel planning assistant.
+
+  Using the itinerary context provided, write a concise, friendly email the
+  traveller could keep as their trip overview. Include: destination and
+  dates, the selected flight and hotel with prices, any restaurant
+  reservation plan, the budget picture, and visa/entry notes if present.
+
+  CRITICAL RULES:
+  - Do NOT claim any booking is confirmed or completed. Describe selections
+    as "ready to confirm" — confirmations are added only after the user
+    approves and the booking system returns confirmation IDs.
+  - Do not invent details missing from the context; omit missing sections.
+
+  Respond with valid JSON only:
+  {"subject": "<email subject line>", "body": "<plain-text email body>"}
+
+input_variables: []
+
+output_schema:
+  type: object
+  properties:
+    subject:
+      type: string
+    body:
+      type: string
+  required:
+    - subject
+    - body
+
+eval:
+  dataset: tests/eval/cases/action/email_drafting.jsonl
+  metric: schema_valid
+  threshold: 1.00
+
+changelog:
+  - version: 1
+    date: 2026-07-13
+    change: "Phase 4 Step 5 — email drafting behind the confirmation gate."
