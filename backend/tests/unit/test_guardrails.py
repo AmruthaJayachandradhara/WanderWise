@@ -14,6 +14,7 @@ import pytest
 from backend.app.guardrails.input import _injection_heuristic, route_input
 from backend.app.guardrails.output import (
     check_no_hallucinated_booking,
+    output_guardrail_node,
     route_output,
     validate_budget,
     validate_schema,
@@ -148,6 +149,49 @@ class TestNoHallucinatedBooking:
             "budget_breakdown": None,
         }
         assert check_no_hallucinated_booking(state) is None
+
+
+class TestBookingGateEnforcement:
+    """Phase 4: the gate runs end-to-end through output_guardrail_node.
+
+    Fabricated claims are blocked at the node level (verdict drives the
+    reflection edge); a provider-produced confirmation_id lets the same
+    claim through. This is the structural guarantee — only a state write
+    from booking_execution can flip the outcome.
+    """
+
+    def _acting_state(self, **overrides) -> dict:
+        state = {
+            "summary": "Your reservation confirmed: table for 2 at Sushi Saito.",
+            "budget_breakdown": _valid_budget_breakdown(),
+            "visa_answer": None,  # grounding check skips without rag_results
+            "rag_results": None,
+        }
+        state.update(overrides)
+        return state
+
+    def test_fabricated_booking_claim_blocked_at_node(self):
+        verdict = output_guardrail_node(self._acting_state())["output_verdict"]
+        assert not verdict["passed"]
+        assert verdict["failed_checks"] == ["no_hallucinated_booking"]
+        # A failed verdict routes to reflection, not to the user
+        assert route_output({"output_verdict": verdict, "reflection_attempts": 0}) == "reflect"
+
+    def test_real_confirmation_passes_at_node(self):
+        state = self._acting_state(
+            confirmation_id="WW-8F3A21C0",
+            confirmations=[{"confirmation_id": "WW-8F3A21C0", "provider": "mock"}],
+        )
+        verdict = output_guardrail_node(state)["output_verdict"]
+        assert verdict["passed"]
+        assert route_output({"output_verdict": verdict}) == "ok"
+
+    def test_enforcement_is_trace_visible(self, caplog):
+        import logging as _logging
+
+        with caplog.at_level(_logging.WARNING, logger="backend.app.guardrails.output"):
+            output_guardrail_node(self._acting_state())
+        assert any("no-hallucinated-booking" in r.message for r in caplog.records)
 
 
 class TestRouteOutput:

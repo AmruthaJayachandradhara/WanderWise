@@ -132,21 +132,22 @@ def check_grounding(state: GraphState) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Check 4 — No-hallucinated-booking seam (design only — tested in Phase 4)
+# Check 4 — No-hallucinated-booking (enforced since Phase 4)
 # ---------------------------------------------------------------------------
 
 def check_no_hallucinated_booking(state: GraphState) -> dict | None:
-    """Structural rule: only the Booking/Action agent may assert a reservation.
+    """Structural rule: only booking_execution may assert a reservation.
 
-    The Booking/Action agent does not exist until Phase 4, so this check
-    always passes in Phase 3. The seam is wired now so Phase 4 can enforce
-    it without touching the guardrail node.
+    A booking claim in the summary is gated on the presence of a
+    confirmation_id in state, which only a BookingProvider call (in the
+    booking_execution node) can produce. This is a structural guarantee,
+    not a prompt instruction — the generator model cannot fabricate its
+    way past it.
 
     Rule: if the summary claims a confirmed reservation (booking ID, confirmed
     booking, etc.) but no confirmation_id exists in state, that is a violation.
     """
-    # Phase 3: seam only — the Booking agent and confirmation_id aren't wired yet
-    confirmation_id = state.get("confirmation_id")  # will be populated by Phase 4 Booking agent
+    confirmation_id = state.get("confirmation_id")
     summary = state.get("summary", "")
 
     booking_claim_keywords = ["confirmed booking", "reservation confirmed", "booking id", "confirmation number"]
@@ -157,7 +158,12 @@ def check_no_hallucinated_booking(state: GraphState) -> dict | None:
         logger.warning("output_guardrail: no-hallucinated-booking rule violated — %s", detail)
         return _make_verdict(False, ["no_hallucinated_booking"], detail)
 
-    return None  # passed (or seam not triggered)
+    if claims_booking:
+        # Trace-visible positive path: a real confirmation backs the claim
+        logger.info(
+            "output_guardrail: booking claim backed by confirmation_id=%s", confirmation_id
+        )
+    return None  # passed (or no booking claim made)
 
 
 # ---------------------------------------------------------------------------

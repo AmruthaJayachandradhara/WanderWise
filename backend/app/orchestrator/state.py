@@ -93,3 +93,9 @@ class GraphState(TypedDict, total=False):
     # --- Caching (Phase 3) ---
     cache_hit: bool              # True if answer served from semantic cache
     cache_source: str            # "semantic" | "api" | None
+
+    # --- Booking & confirmations (Phase 4) ---
+    # Only booking_execution (via a BookingProvider) may write these; the
+    # no-hallucinated-booking guardrail gates summaries on their presence.
+    confirmations: list[dict]        # all confirmed reservations this run
+    confirmation_id: str | None      # primary confirmation (read by output guardrail)
