@@ -4,6 +4,11 @@ Phase 2 (v2): Synthesises a full travel itinerary from all parallel-agent
 results: selected flight, hotel, weather forecast, visa/advisory answer,
 and budget breakdown. Degrades gracefully when any component is missing.
 
+Phase 4: folds in reservations/confirmations (flights, hotels, restaurants
+— all via the same BookingProvider seam), the auto-created calendar hold,
+and the drafted (never auto-sent) itinerary email, so the assembled
+itinerary reflects real action-taking, not just search results.
+
 Uses the "large" tier for synthesis — this is the step where token quality
 matters most since the output is shown directly to the user.
 """
@@ -88,6 +93,60 @@ def assemble_node(state: GraphState) -> dict:
     else:
         visa_section = "No visa information requested."
 
+    # Restaurant / activities section
+    selected_restaurant = state.get("selected_restaurant")
+    events = state.get("events") or []
+    activities_degraded = state.get("activities_degraded", False)
+    if selected_restaurant:
+        activities_section = (
+            f"Proposed restaurant: {selected_restaurant.get('name', 'Unknown')} "
+            f"— {selected_restaurant.get('slot', 'time TBD')}, "
+            f"party of {selected_restaurant.get('party_size', 2)}"
+        )
+    elif activities_degraded:
+        activities_section = "Restaurant/activity search is currently unavailable."
+    else:
+        activities_section = "No restaurant reservation requested."
+    if events:
+        activities_section += (
+            f"\nEvents nearby ({len(events)} found, deep links only — not booked in-app): "
+            + "; ".join(e.get("name", "Unknown") for e in events[:3])
+        )
+
+    # Reservations & confirmations section — the ONLY source of booking claims
+    # the summary is allowed to make (no-hallucinated-booking gate keys on this).
+    confirmations = state.get("confirmations") or []
+    if confirmations:
+        reservations_section = "\n".join(
+            f"- {c.get('booking_type', 'booking').title()} CONFIRMED via "
+            f"{c.get('provider', 'provider')}: {c.get('description', '')} "
+            f"(confirmation ID: {c.get('confirmation_id', '')})"
+            for c in confirmations
+        )
+    elif state.get("pending_actions"):
+        reservations_section = "Bookings were proposed but not yet confirmed."
+    else:
+        reservations_section = "No bookings were made this session."
+
+    # Action layer section — calendar hold (auto) + drafted email (gated)
+    action_parts = []
+    if state.get("calendar_ics"):
+        action_parts.append("A calendar hold (.ics) was created for this trip.")
+    email_draft = state.get("email_draft")
+    email_status = state.get("email_status", "none")
+    if email_draft and email_status == "approved":
+        action_parts.append(
+            f"An itinerary email ({email_draft.get('subject', '')!r}) was approved and released."
+        )
+    elif email_draft and email_status == "drafted":
+        action_parts.append(
+            f"An itinerary email ({email_draft.get('subject', '')!r}) was drafted and is "
+            "awaiting your confirmation before it is sent."
+        )
+    elif email_status == "discarded":
+        action_parts.append("The drafted itinerary email was discarded per your decision.")
+    action_section = " ".join(action_parts) if action_parts else "No actions taken this session."
+
     # Prior session context — inject pinned constraints + summary if present
     prior_section = ""
     pinned = state.get("pinned_constraints") or {}
@@ -105,8 +164,11 @@ def assemble_node(state: GraphState) -> dict:
         f"Weather: {weather_section}\n"
         f"Flight: {flight_section}\n"
         f"Hotel: {hotel_section}\n"
+        f"Activities/Dining: {activities_section}\n"
         f"Budget: {budget_section}\n"
-        f"Visa/Advisory: {visa_section}"
+        f"Visa/Advisory: {visa_section}\n"
+        f"Reservations: {reservations_section}\n"
+        f"Actions taken: {action_section}"
         f"{prior_section}"
     )
 

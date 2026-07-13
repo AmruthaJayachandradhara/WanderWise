@@ -69,6 +69,42 @@
 }
 .degraded { color: #f59e0b; }
 
+/* Phase 4 — confirmation gate (booking / drafted-email human-in-the-loop) */
+.confirmation-gate {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #fbbf24;
+  background: #fffbeb;
+  border-radius: 8px;
+}
+.confirmation-gate-title { margin: 0 0 6px; font-weight: 600; font-size: 0.85rem; }
+.pending-actions { margin: 0 0 8px; padding-left: 18px; font-size: 0.85rem; }
+.email-draft {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.email-draft-subject { margin: 0 0 4px; font-weight: 600; font-size: 0.85rem; }
+.email-draft-body { margin: 0; font-size: 0.8rem; white-space: pre-wrap; color: #374151; }
+.confirmation-gate-actions { display: flex; gap: 8px; }
+.approve-btn, .decline-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.approve-btn { background: #16a34a; color: white; }
+.decline-btn { background: #e5e7eb; color: #374151; }
+
+/* Phase 4 — reservation confirmations + action summary */
+.reservations { margin-top: 8px; font-size: 0.85rem; }
+.confirmations-list { margin: 0 0 4px; padding-left: 18px; }
+.confirmations-list code { font-size: 0.78rem; background: #f3f4f6; padding: 1px 4px; border-radius: 4px; }
+.action-note { margin: 2px 0; color: #4b5563; }
+
 .hero {
   position: relative;
 

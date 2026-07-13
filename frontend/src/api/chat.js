@@ -10,7 +10,24 @@ export async function* streamChat(query, userId = null) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, user_id: userId }),
   });
+  yield* parseSSE(response);
+}
 
+/**
+ * Resumes a run paused at the confirmation gate (Phase 4 human-in-the-loop
+ * booking/email gate) with the user's approve/decline decision. Streams the
+ * remaining progress/done events the same way streamChat does.
+ */
+export async function* resumeChat(threadId, approved) {
+  const response = await fetch("/api/chat/resume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId, approved }),
+  });
+  yield* parseSSE(response);
+}
+
+async function* parseSSE(response) {
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
   }

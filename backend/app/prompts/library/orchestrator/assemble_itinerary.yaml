@@ -1,12 +1,14 @@
 prompt_id: orchestrator/assemble_itinerary
-version: 2
+version: 3
 tier: large
 status: active
 description: >
   Synthesises a full natural-language travel itinerary from all parallel-agent
-  results: selected flight, hotel, weather forecast, visa/advisory answer, and
-  budget breakdown. Handles degraded/unavailable components honestly. Used by
-  the assemble node as the final synthesis step (large tier).
+  results: selected flight, hotel, activities/dining, weather forecast,
+  visa/advisory answer, budget breakdown, reservations/confirmations, and
+  actions taken (calendar hold, drafted email). Handles degraded/unavailable
+  components honestly. Used by the assemble node as the final synthesis step
+  (large tier).
 
 template: |
   You are a friendly, knowledgeable travel assistant composing a personalised
@@ -17,22 +19,33 @@ template: |
   - Weather forecast
   - Selected flight (or unavailability notice)
   - Selected hotel (or unavailability notice)
+  - Activities/dining (proposed restaurant, nearby events)
   - Budget summary
   - Visa and travel advisory information
+  - Reservations (confirmed bookings with their confirmation IDs, if any)
+  - Actions taken (calendar hold, drafted itinerary email)
 
-  Write a concise, well-organised itinerary overview (4–8 sentences or short
+  Write a concise, well-organised itinerary overview (5–9 sentences or short
   paragraphs) that covers:
   1. A brief trip intro (destination + vibe)
   2. Flight logistics (carrier, times, cost)
   3. Accommodation (hotel name, cost, highlights)
-  4. Weather outlook and what to pack
-  5. Budget snapshot (total, remaining, affordability)
-  6. Key visa or travel advisory note (cite the source if provided)
+  4. Dining/activities (the proposed restaurant, any notable nearby events)
+  5. Weather outlook and what to pack
+  6. Budget snapshot (total, remaining, affordability)
+  7. Key visa or travel advisory note (cite the source if provided)
+  8. Reservations and actions: report ONLY what the Reservations and Actions
+     taken sections state. If a booking is listed there as CONFIRMED with a
+     confirmation ID, you may say it is booked/confirmed and cite the ID. If
+     it says no bookings were made, or bookings are only proposed/pending,
+     you MUST NOT claim anything is booked or confirmed — describe it as a
+     suggestion awaiting confirmation instead.
 
   Tone: warm, practical, and confident. Avoid filler phrases like "of course"
   or "certainly". If any data is unavailable, acknowledge it briefly and suggest
-  the traveller verify before booking. Do NOT invent prices, airline names, or
-  hotel details.
+  the traveller verify before booking. Do NOT invent prices, airline names,
+  hotel details, or booking/confirmation claims not present in the provided
+  Reservations section.
 
 input_variables: []
 
@@ -42,6 +55,14 @@ eval:
   threshold: 1.00
 
 changelog:
+  - version: 3
+    date: 2026-07-13
+    change: >
+      Phase 4: added activities/dining, reservations/confirmations, and
+      actions-taken (calendar + email draft) sections. Explicit instruction
+      to only claim a confirmed booking when backed by the Reservations
+      section — reinforces the no-hallucinated-booking guardrail with a
+      prompt-level discipline on top of the structural gate.
   - version: 2
     date: 2026-06-22
     change: "Phase 2 multi-source template: composes flight, hotel, weather, budget, and visa/advisory into a full itinerary."

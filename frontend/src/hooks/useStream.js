@@ -1,13 +1,17 @@
 import { useCallback, useState } from "react";
-import { streamChat } from "../api/chat";
+import { streamChat, resumeChat } from "../api/chat";
 
 /**
- * Manages a streaming chat session.
+ * Manages a streaming chat session, including the Phase 4 confirmation gate:
+ * a run can pause mid-stream awaiting the user's approve/decline decision
+ * on high-risk actions (booking, sending the drafted email) before it
+ * completes with the final itinerary.
  *
  * Returns:
- *   messages  — array of { role, text, meta? } objects
- *   status    — "idle" | "streaming" | "done" | "error"
- *   sendQuery — function to start a new query
+ *   messages            — array of { role, text, meta?, interrupt? } objects
+ *   status              — "idle" | "streaming" | "awaiting_confirmation" | "done" | "error"
+ *   sendQuery           — function to start a new query
+ *   respondToConfirmation — function(approved: bool) to resume a paused run
  */
 export function useStream() {
   const [messages, setMessages] = useState([]);
@@ -15,6 +19,58 @@ export function useStream() {
 
   const appendMessage = (msg) =>
     setMessages((prev) => [...prev, msg]);
+
+  const updateLast = (patch) =>
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = { ...updated[updated.length - 1], ...patch };
+      updated[updated.length - 1] = last;
+      return updated;
+    });
+
+  const consumeStream = useCallback(async (iterator) => {
+    for await (const { event, data } of iterator) {
+      if (event === "progress") {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = { ...updated[updated.length - 1] };
+          last.progress = [...(last.progress || []), data.node];
+          last.text = `Processing: ${last.progress.join(" → ")}…`;
+          updated[updated.length - 1] = last;
+          return updated;
+        });
+      } else if (event === "interrupt") {
+        updateLast({
+          text: "Review the actions below before I proceed.",
+          progress: undefined,
+          interrupt: {
+            threadId: data.thread_id,
+            pendingActions: data.pending_actions || [],
+            emailDraft: data.email_draft,
+          },
+        });
+        setStatus("awaiting_confirmation");
+        return;
+      } else if (event === "done") {
+        updateLast({
+          text: data.summary || "(no summary)",
+          progress: undefined,
+          interrupt: undefined,
+          meta: {
+            location: data.location,
+            routerTier: data.router_tier,
+            assembleTier: data.assemble_tier,
+            degraded: data.degraded,
+            confirmations: data.confirmations || [],
+            calendarIcs: data.calendar_ics,
+            emailDraft: data.email_draft,
+            emailStatus: data.email_status,
+          },
+        });
+        setStatus("done");
+      }
+    }
+  }, []);
 
   const sendQuery = useCallback(async (query) => {
     if (!query.trim()) return;
@@ -26,46 +82,31 @@ export function useStream() {
     appendMessage({ role: "assistant", text: "", progress: [] });
 
     try {
-      for await (const { event, data } of streamChat(query)) {
-        if (event === "progress") {
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = { ...updated[updated.length - 1] };
-            last.progress = [...(last.progress || []), data.node];
-            last.text = `Processing: ${last.progress.join(" → ")}…`;
-            updated[updated.length - 1] = last;
-            return updated;
-          });
-        } else if (event === "done") {
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = { ...updated[updated.length - 1] };
-            last.text = data.summary || "(no summary)";
-            last.progress = undefined;
-            last.meta = {
-              location: data.location,
-              routerTier: data.router_tier,
-              assembleTier: data.assemble_tier,
-              degraded: data.degraded,
-            };
-            updated[updated.length - 1] = last;
-            return updated;
-          });
-          setStatus("done");
-        }
-      }
+      await consumeStream(streamChat(query));
     } catch (err) {
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = { ...updated[updated.length - 1] };
-        last.text = `Error: ${err.message}`;
-        last.error = true;
-        updated[updated.length - 1] = last;
-        return updated;
-      });
+      updateLast({ text: `Error: ${err.message}`, error: true });
       setStatus("error");
     }
-  }, []);
+  }, [consumeStream]);
 
-  return { messages, status, sendQuery };
+  const respondToConfirmation = useCallback(async (approved) => {
+    const last = messages[messages.length - 1];
+    const threadId = last?.interrupt?.threadId;
+    if (!threadId) return;
+
+    updateLast({
+      interrupt: undefined,
+      text: approved ? "Booking approved — finalising your itinerary…" : "Declined — wrapping up without booking…",
+    });
+    setStatus("streaming");
+
+    try {
+      await consumeStream(resumeChat(threadId, approved));
+    } catch (err) {
+      updateLast({ text: `Error: ${err.message}`, error: true });
+      setStatus("error");
+    }
+  }, [messages, consumeStream]);
+
+  return { messages, status, sendQuery, respondToConfirmation };
 }
