@@ -25,7 +25,7 @@ def _hit(score: float, chash: str, text: str = "US citizens visa-free 90 days.")
 
 
 class _FakeClient:
-    """Stand-in Qdrant client capturing the filter passed to search()."""
+    """Stand-in Qdrant client capturing the filter passed to query_points()."""
 
     def __init__(self, hits_by_collection: dict[str, list], collections: list[str]):
         self._hits = hits_by_collection
@@ -36,9 +36,9 @@ class _FakeClient:
         cols = [SimpleNamespace(name=n) for n in self._collections]
         return SimpleNamespace(collections=cols)
 
-    def search(self, collection_name, query_vector, query_filter, limit):
+    def query_points(self, collection_name, query, query_filter, limit):
         self.captured_filters.append(query_filter)
-        return self._hits.get(collection_name, [])
+        return SimpleNamespace(points=self._hits.get(collection_name, []))
 
 
 def _patch_common(monkeypatch, client):
@@ -71,7 +71,7 @@ def test_retrieve_happy_path(monkeypatch):
 
 
 def test_retrieve_metadata_filter_applied(monkeypatch):
-    """The country_iso + passport_nationality filter is built and passed to search."""
+    """The country_iso + passport_nationality filter is built and passed to query_points."""
     client = _FakeClient(
         hits_by_collection={"visa_entry": [_hit(0.9, "h1")]},
         collections=["visa_entry"],
@@ -80,7 +80,7 @@ def test_retrieve_metadata_filter_applied(monkeypatch):
 
     retrieve("visa?", "JP", "US")
 
-    assert client.captured_filters, "search() must receive a filter"
+    assert client.captured_filters, "query_points() must receive a filter"
     must = client.captured_filters[0].must
     keys = {c.key: c.match.value for c in must}
     assert keys["country_iso"] == "JP"

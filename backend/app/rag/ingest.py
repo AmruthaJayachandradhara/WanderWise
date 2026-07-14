@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import httpx
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, VectorParams
 
 from backend.app.config import settings
 from backend.app.rag.collections import COLLECTION_CONFIGS, chunk_text
@@ -25,17 +25,51 @@ from backend.app.rag.embeddings import embed_texts
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 10.0
-_ADVISORY_URL = "https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories/{iso}.html"
-_RESTCOUNTRIES_URL = "https://restcountries.com/v3.1/alpha/{iso}"
+
+# travel.state.gov migrated off the old /content/travel/en/traveladvisories/
+# traveladvisories/{iso}.html scheme (now 404s) to a name-slugged path with
+# no discoverable ISO-code mapping — hence this static table instead of a
+# format string. Built by probing each of the 50 ingest_corpus.py countries
+# live; entries not listed here (e.g. US has no self-advisory) or any future
+# addition to that list will just skip the advisory/visa_entry source for
+# that country (see fetch_country_sources), same as an unreachable URL would.
+_ADVISORY_SLUGS: dict[str, str] = {
+    "GB": "united-kingdom", "FR": "france", "DE": "germany", "IT": "italy", "ES": "spain",
+    "PT": "portugal", "CH": "switzerland", "SE": "sweden", "NO": "norway", "FI": "finland",
+    "CZ": "czechia", "HU": "hungary", "GR": "greece", "RO": "romania",
+    "JP": "japan", "KR": "south-korea", "CN": "china", "VN": "vietnam", "SG": "singapore",
+    "MY": "malaysia", "ID": "indonesia", "IN": "india",
+    "NZ": "new-zealand", "CA": "canada", "MX": "mexico", "CL": "chile", "CO": "colombia",
+    "ZA": "south-africa", "NG": "nigeria", "EG": "egypt", "SA": "saudi-arabia", "TR": "turkey",
+    "JO": "jordan",
+}
+_ADVISORY_URL = "https://travel.state.gov/en/international-travel/travel-advisories/{slug}.html"
+
+# v3.1 was retired; v5 requires a signup key (settings.RESTCOUNTRIES_API_KEY).
+# https://restcountries.com/docs/countries
+_RESTCOUNTRIES_URL = "https://api.restcountries.com/countries/v5/codes.alpha_2/{iso}"
+
+
+_SKIP_TAGS = frozenset({"script", "style"})
 
 
 class _HTMLStripper(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in _SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        self._parts.append(data)
+        if self._skip_depth == 0:
+            self._parts.append(data)
 
     def get_text(self) -> str:
         return " ".join(self._parts)
@@ -53,6 +87,9 @@ def _get_client() -> QdrantClient:
     return QdrantClient(":memory:")
 
 
+_FILTERABLE_FIELDS = ("country_iso", "passport_nationality", "source_url")
+
+
 def _ensure_collection(client: QdrantClient, name: str, vector_size: int) -> None:
     existing = {c.name for c in client.get_collections().collections}
     if name not in existing:
@@ -60,6 +97,16 @@ def _ensure_collection(client: QdrantClient, name: str, vector_size: int) -> Non
             collection_name=name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
+        # retriever.py filters on country_iso/passport_nationality and
+        # staleness.py additionally filters on source_url — this Qdrant
+        # server rejects a filter on any payload field without an explicit
+        # keyword index (fine on :memory:, enforced on Qdrant Cloud).
+        for field in _FILTERABLE_FIELDS:
+            client.create_payload_index(
+                collection_name=name,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
 
 
 def fetch_country_sources(country_iso: str) -> tuple[list[tuple[str, str, str]], str | None]:
@@ -69,48 +116,63 @@ def fetch_country_sources(country_iso: str) -> tuple[list[tuple[str, str, str]],
     Shared by ingest_country and the Phase 4 staleness refresh, so both
     always see identical source material for the hash comparison.
     """
-    iso_lower = country_iso.lower()
-
     # Fetch advisory page
     advisory_text = ""
     advisory_level = None
-    try:
-        resp = httpx.get(_ADVISORY_URL.format(iso=iso_lower), timeout=_TIMEOUT_S, follow_redirects=True)
-        if resp.status_code == 200:
-            advisory_text = _strip_html(resp.text)[:8000]
-            if "Level 1" in advisory_text:
-                advisory_level = "Level 1"
-            elif "Level 2" in advisory_text:
-                advisory_level = "Level 2"
-            elif "Level 3" in advisory_text:
-                advisory_level = "Level 3"
-            elif "Level 4" in advisory_text:
-                advisory_level = "Level 4"
-    except Exception as exc:
-        logger.warning("ingest %s: advisory fetch failed — %s", country_iso, exc)
+    advisory_url = ""
+    slug = _ADVISORY_SLUGS.get(country_iso.upper())
+    if slug:
+        advisory_url = _ADVISORY_URL.format(slug=slug)
+        try:
+            resp = httpx.get(advisory_url, timeout=_TIMEOUT_S, follow_redirects=True)
+            if resp.status_code == 200:
+                advisory_text = _strip_html(resp.text)[:8000]
+                if "Level 1" in advisory_text:
+                    advisory_level = "Level 1"
+                elif "Level 2" in advisory_text:
+                    advisory_level = "Level 2"
+                elif "Level 3" in advisory_text:
+                    advisory_level = "Level 3"
+                elif "Level 4" in advisory_text:
+                    advisory_level = "Level 4"
+        except Exception as exc:
+            logger.warning("ingest %s: advisory fetch failed — %s", country_iso, exc)
+    else:
+        logger.warning("ingest %s: no travel.state.gov slug mapping — skipping advisory/visa_entry", country_iso)
 
     # Fetch country metadata for destination guide
     guide_text = ""
-    try:
-        resp = httpx.get(_RESTCOUNTRIES_URL.format(iso=country_iso), timeout=_TIMEOUT_S)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list) and data:
-                c = data[0]
-                guide_text = (
-                    f"{c.get('name', {}).get('common', country_iso)} travel information. "
-                    f"Region: {c.get('region', '')}. "
-                    f"Capital: {', '.join(c.get('capital', []))}. "
-                    f"Languages: {', '.join(c.get('languages', {}).values())}. "
-                    f"Currency: {', '.join(c.get('currencies', {}).keys())}."
-                )
-    except Exception as exc:
-        logger.warning("ingest %s: restcountries fetch failed — %s", country_iso, exc)
+    restcountries_url = _RESTCOUNTRIES_URL.format(iso=country_iso.upper())
+    if settings.RESTCOUNTRIES_API_KEY:
+        try:
+            resp = httpx.get(
+                restcountries_url,
+                headers={"Authorization": f"Bearer {settings.RESTCOUNTRIES_API_KEY}"},
+                timeout=_TIMEOUT_S,
+            )
+            if resp.status_code == 200:
+                objects = resp.json().get("data", {}).get("objects", [])
+                if objects:
+                    c = objects[0]
+                    capitals = ", ".join(cap.get("name", "") for cap in (c.get("capitals") or []))
+                    languages = ", ".join(lang.get("name", "") for lang in (c.get("languages") or []))
+                    currencies = ", ".join(cur.get("name", "") for cur in (c.get("currencies") or []))
+                    guide_text = (
+                        f"{c.get('names', {}).get('common', country_iso)} travel information. "
+                        f"Region: {c.get('region', '')}. "
+                        f"Capital: {capitals}. "
+                        f"Languages: {languages}. "
+                        f"Currency: {currencies}."
+                    )
+        except Exception as exc:
+            logger.warning("ingest %s: restcountries fetch failed — %s", country_iso, exc)
+    else:
+        logger.warning("ingest %s: RESTCOUNTRIES_API_KEY not set — skipping destination_guides", country_iso)
 
     sources = [
-        ("visa_entry", advisory_text, _ADVISORY_URL.format(iso=iso_lower)),
-        ("advisories", advisory_text, _ADVISORY_URL.format(iso=iso_lower)),
-        ("destination_guides", guide_text, _RESTCOUNTRIES_URL.format(iso=country_iso)),
+        ("visa_entry", advisory_text, advisory_url),
+        ("advisories", advisory_text, advisory_url),
+        ("destination_guides", guide_text, restcountries_url),
     ]
     return sources, advisory_level
 
@@ -127,8 +189,18 @@ def build_point(
 ) -> PointStruct:
     """One chunk → one Qdrant point; the single place payloads are shaped."""
     content_hash = hashlib.sha256(chunk_text_val.encode()).hexdigest()
+    # id must be unique per (country, passport, chunk) — not content_hash
+    # alone, which is passport-independent (advisory/visa text doesn't vary
+    # by passport). Two passports for the same country previously hashed to
+    # the same point id and silently overwrote each other, so a two-passport
+    # query (e.g. US + Indian to Japan) only ever had the last-ingested
+    # passport's data. content_hash itself stays pure-content: staleness.py's
+    # diff already scopes lookups by (country, passport, source_url) via a
+    # Qdrant filter before comparing hashes, so it doesn't need passport
+    # folded into the hash value itself.
+    point_id = hashlib.sha256(f"{country_iso}:{passport}:{chunk_text_val}".encode()).hexdigest()
     return PointStruct(
-        id=int(content_hash[:8], 16),
+        id=int(point_id[:8], 16),
         vector=vector,
         payload={
             "text": chunk_text_val,

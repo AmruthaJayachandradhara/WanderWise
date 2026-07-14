@@ -84,12 +84,12 @@ def _retrieve(query: str, country_iso: str, passport_nationality: str) -> list[R
     for collection_name in COLLECTION_CONFIGS:
         if collection_name not in existing:
             continue
-        hits = client.search(
+        hits = client.query_points(
             collection_name=collection_name,
-            query_vector=vector,
+            query=vector,
             query_filter=metadata_filter,
             limit=_PER_COLLECTION_LIMIT,
-        )
+        ).points
         for hit in hits:
             payload = hit.payload or {}
             content_hash = payload.get("content_hash", payload.get("text", ""))

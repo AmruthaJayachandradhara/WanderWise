@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # Vector DB (Qdrant)
     QDRANT_URL: str | None = None
     QDRANT_API_KEY: str | None = None
+
+    # RAG corpus ingestion (backend/app/rag/ingest.py) — destination_guides source.
+    # restcountries.com's free v3.1 API was retired; v5 requires a signup key.
+    RESTCOUNTRIES_API_KEY: str | None = None
     
     # Cache / Session Store (Upstash Redis)
     UPSTASH_REDIS_URL: str | None = None
