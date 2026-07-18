@@ -251,4 +251,4 @@ If a week slips, this system degrades gracefully in this order — never cut the
 - **A prompt is a versioned artifact.** It has an ID, a version, a changelog, an owner (its folder = its agent), and its own eval cases. It is never a string literal in node logic.
 - **The prompt library mirrors the code's module split.** `orchestrator/` = non-tool-bearing nodes; every other folder = one `agents/*.py`. Structure is self-documenting and verifiable.
 - **Every agent is symmetric.** Each specialist agent owns its extraction prompt, its tool call, and its reasoning step. Weather is not special — Phase 1's router-owned extraction was a first-agent artifact, corrected in Phase 2.
-- **Prompt changes are CI-gated and attributable.** A prompt edit runs its own eval in CI before the full-graph gate; every trace records which prompt version ran, so a regression points at a specific prompt and version.
+- **Prompt changes are CI-gated and attributable.** A prompt edit runs its own eval in CI before the full-graph gate; every trace records which prompt version ran, so a regression points at a specific prompt and versions.
