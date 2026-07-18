@@ -12,7 +12,7 @@
 | **Live URL** | https://gwuwanderwise-wanderwise.hf.space |
 | **HF Space** | `GwuWanderwise/wanderwise` (Docker SDK, port 7860) |
 | **Language** | Python 3.12 (uv), Node 20 (Vite + React) |
-| **Current phase** | Phase 3 complete |
+| **Current phase** | Phase 4 complete |
 
 ---
 
@@ -711,6 +711,323 @@ run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_int
 
 ---
 
+## Phase 4 — Booking, Actions & Query Decomposition
+
+**Status: Complete.**
+
+WanderWise now takes real action, not just plans one. A booking request fans out into per-passport visa lookups, a restaurant is found and proposed, flights and hotels are searched — and then the graph *stops*: every high-risk action (booking money, sending an email) sits behind a human-in-the-loop confirmation gate that structurally cannot be bypassed by a model. Only after explicit approval does a `BookingProvider` call fire and a real `confirmation_id` get written — the one fact the no-hallucinated-booking guardrail checks for. A scheduled job keeps the RAG corpus from silently rotting.
+
+---
+
+### Graph Topology — Phase 4
+
+```
+START → memory → input_guardrail → (blocked? → refusal → END)
+                                 → cache_lookup → (hit → output_guardrail)
+                                 → router → decompose → plan
+                                         → [travel_search ∥ weather ∥ rag ∥ activities]
+                                         → budget → action
+                                                  → (no pending) → assemble
+                                                  → confirmation_gate   ← interrupt()
+                                                     → approved → booking_execution → assemble
+                                                     → declined → assemble
+                                         → assemble → output_guardrail
+                                                  → ok → session_update → END
+                                                  → reflect (≤2) → reflection
+                                                                 → output_guardrail  ← cycle
+```
+
+Four new first-class elements vs Phase 3:
+- **`decompose`** — new node between `router` and `plan`; splits a multi-part query ("US passport + Indian passport → Japan") into per-`(passport, destination)` sub-queries the `rag` agent fans out over, and piggybacks `booking_requested` detection (no second intent call).
+- **`activities`** — fourth parallel agent alongside `travel_search`/`weather`/`rag`; restaurant + event search, proposes one restaurant.
+- **`action` → `confirmation_gate` → `booking_execution`** — the risk-tiered action layer. `action` always runs (auto-generates a calendar hold); if it queues `pending_actions`, the conditional edge routes to `confirmation_gate`, which calls LangGraph's `interrupt()` and **pauses the run at a checkpoint**. The graph structurally cannot reach `booking_execution` without an external resume carrying the user's decision — this is a graph-edge guarantee, not a prompt instruction.
+- **`booking_execution`** — the *only* node that calls a `BookingProvider`; sole writer of `confirmation_id`, the field the no-hallucinated-booking guardrail keys on.
+
+Total nodes: **19** (was 14). Compiling now requires an `InMemorySaver` checkpointer and every `graph.invoke()`/`graph.astream()` call needs a `thread_id` — the interrupt/resume cycle is checkpoint-addressed.
+
+---
+
+### State Schema — Phase 4 Additions
+
+Fields appended to `GraphState` in `backend/app/orchestrator/state.py`:
+
+| Field | Set by | Description |
+|---|---|---|
+| `confirmations` | `booking_execution` | All confirmed reservations this run (`booking_type`, `provider`, `reservation_id`, `confirmation_id`, `description`) |
+| `confirmation_id` | `booking_execution` | Primary confirmation — the no-hallucinated-booking guardrail's key |
+| `sub_queries` | `decompose` | `[{query, passport, destination, kind}]` — the RAG fan-out list |
+| `decompose_tier` | `decompose` | Tier used (always `"small"`) |
+| `restaurants` / `events` | `activities` | Raw Overpass / Ticketmaster results (or `None` on full degrade) |
+| `selected_restaurant` | `activities` | Proposed reservation: `{venue_id, name, slot, party_size, reason}` |
+| `activities_degraded` | `activities` | `True` if both search sources degraded |
+| `activities_tier` | `activities` | Tier used for selection reasoning (`"large"`) |
+| `booking_requested` | `decompose` | Query asked to book something — gates the Action agent's high-risk path |
+| `pending_actions` | `action` | Queued high-risk actions awaiting the gate (flight/hotel/restaurant bookings + email send) |
+| `actions_approved` | `confirmation_gate` | The user's resumed decision (`True`/`False`/`None`) |
+| `calendar_ics` | `action` | Auto-generated `.ics` hold — low-risk, no gate |
+| `email_draft` | `action` | `{subject, body}` — drafted, never auto-sent |
+| `email_status` | `action` / `confirmation_gate` / `booking_execution` | `"none"` \| `"drafted"` \| `"approved"` \| `"discarded"` |
+| `action_tier` | `action` | Tier used to draft the email (`"large"`) |
+| `rag_stale` | `rag` | `True` if any retrieved chunk exceeded its collection's staleness threshold |
+
+---
+
+### Booking
+
+**`backend/app/booking/provider.py`** — the single seam every booking goes through
+
+- `BookingProvider` (runtime-checkable `Protocol`): five-method lifecycle — `search → check → reserve → confirm → cancel` — every method returns a `ToolResult` (Phase 1 contract) and never raises.
+- Typed I/O shared by every provider: `BookingOffer`, `BookingSearchRequest/Result`, `AvailabilityCheck`, `ReservationRequest`, `Reservation`, `Confirmation`, `Cancellation`.
+- `get_provider(booking_type) → BookingProvider` — config-driven factory. Resolves `booking_type` (`"flight"`/`"hotel"`/`"restaurant"`) through `settings.BOOKING_PROVIDER_MAP` to a provider name, then lazily imports and singleton-caches the module. Swapping a booking type to a different backend (e.g. restaurants → OpenTable) is a config change, not a rewrite. Only `get_provider()` itself raises, on a misconfigured booking type.
+
+**`backend/app/booking/duffel_provider.py`** — `DuffelBookingProvider`: real sandbox flight orders + Stays hotel bookings
+
+- All calls go straight to Duffel's REST API v2 via `httpx` — the `duffel-api` SDK was dropped (v1-shaped models the current API rejects; `pyproject.toml` drops the dependency).
+- `search()` delegates to the Phase 2 `DuffelFlightTool`/`DuffelStaysTool`, mapped onto `BookingOffer`.
+- `reserve()`: flights create an instant Duffel order (confirms on create); hotels follow the Stays flow — search result → `fetch_all_rates` → cheapest rate → `quotes` → `bookings`.
+- `confirm()` is a documented pass-through (Duffel orders/bookings already confirmed at creation) — re-fetches the record and returns its booking reference as the confirmation ID, keeping the contract uniform across providers.
+- `cancel()` — order cancellation flow for flights (create + confirm the cancellation), direct cancel action for Stays.
+- `@_guard` decorator wraps every method: times it, catches all exceptions, returns a degraded `ToolResult` instead of raising.
+
+**`backend/app/booking/mock_provider.py`** — `MockBookingProvider`: real HTTP against the self-hosted reservation service
+
+- Transport is config-driven: `settings.RESERVATION_SERVICE_URL` set → a plain network client (docker-compose / standalone deployment); unset (default) → `httpx.ASGITransport` straight into the FastAPI reservation app — full HTTP semantics (routing, status codes, the `Idempotency-Key` header) with no network hop, correct for the single-container HF Space.
+- `reserve()` sends `Idempotency-Key: {user_id}:{booking_type}:{offer_id}`; a `409` slot conflict surfaces as a normal `ToolResult` failure, not an exception.
+- Same `BookingProvider` contract as Duffel — a restaurant reservation and a flight booking are interchangeable behind one seam.
+
+---
+
+### Mock Reservation Microservice
+
+**`backend/app/reservation_service/service.py`** — self-contained FastAPI app; a partner-API stand-in with real semantics
+
+Runs three ways, same code: mounted at `/reservation` inside the main app (HF Spaces prod), standalone via `docker-compose --profile microservices` (`uvicorn backend.app.reservation_service.service:app`), or in-process through `httpx.ASGITransport` (the default `mock_provider` path).
+
+Endpoints: `POST /reservations` (idempotent create, `409` on slot conflict), `GET /reservations/{id}`, `POST /reservations/{id}/confirm`, `DELETE /reservations/{id}` (cancel), `GET /availability`.
+
+**`backend/app/reservation_service/semantics.py`** — the behaviors that make the mock credible
+
+- **Idempotency**: a retried `reserve()` with the same `Idempotency-Key` returns the same reservation, never a double-booking (`created=False` on replay).
+- **Conflict**: a `(venue_id, slot)` held by another live reservation raises `SlotConflictError` → `409`.
+- **Confirmation**: only `confirm()` mints a confirmation ID (`WW-{8 hex}`) — the same contract a real partner API (OpenTable, Duffel) exposes; idempotent (repeat confirms don't re-mint).
+- **Cancellation**: rolls the status back and frees the slot.
+
+**`backend/app/reservation_service/store.py`** — `ReservationStore`: thread-safe in-memory container (`threading.Lock`) — reservations, idempotency-key index, taken-slot index. Deliberately simple; swappable for SQLite later without touching endpoints.
+
+**`docker-compose.yml`** — new `reservation` service, `profiles: ["microservices"]`, port 8001. Optional: the backend calls the reservation service in-process by default; pointing `RESERVATION_SERVICE_URL=http://reservation:8001` at this container exercises the networked-microservice topology locally.
+
+---
+
+### Guardrails — No-Hallucinated-Booking Enforcement
+
+**`backend/app/guardrails/output.py`** — `check_no_hallucinated_booking`, wired as output check #4
+
+Designed (prompt only) in Phase 3, **enforced** here: a structural rule, not a prompt instruction — the generator model cannot fabricate its way past it. If the assembled summary contains a booking-claim keyword (`"confirmed booking"`, `"reservation confirmed"`, `"booking id"`, `"confirmation number"`) but `state["confirmation_id"]` is empty, that's a guardrail failure (`no_hallucinated_booking`) and routes to `reflection` — because `confirmation_id` can only ever be set by `booking_execution` after a real `BookingProvider.confirm()` call. Runs last (after schema, budget, grounding) since it's the cheapest deterministic check and the others already short-circuit most bad output.
+
+---
+
+### Actions & Confirmation Gate
+
+**`backend/app/agents/action.py`** — `action_node`: risk-tiered action taking
+
+- **Low-risk, automatic**: a calendar hold (`.ics`) is generated in code via `build_trip_ics` — no external write, no key, safe to do without asking. Runs unconditionally.
+- **High-risk, gated**: only when `state["booking_requested"]` (set by `decompose`) — drafts the itinerary email (`large` tier, `render("action/email_drafting")`, `json_mode=True`) and builds `pending_actions`: one entry per selected flight/hotel/restaurant with a real `offer_id`, plus an `email_send` action. Nothing here executes a booking; `_build_pending_actions` only *describes* what booking_execution would do.
+
+**`backend/app/tools/calendar.py`** — `build_trip_ics(location, flight, restaurant) → str | None`: pure code, no LLM. Uses `icalendar` to build `VEVENT`s for a flight departure and a restaurant slot (parsed via `datetime.fromisoformat`); returns `None` if nothing datable exists.
+
+**`backend/app/orchestrator/nodes/confirmation.py`** — the gate itself
+
+- `route_action(state) → "confirm" | "skip"` — conditional edge after `action`; anything in `pending_actions` routes to the gate, else straight to `assemble`.
+- `confirmation_gate_node` — calls `interrupt({"pending_actions": ..., "email_draft": ...})`. LangGraph pauses the run at the checkpoint; the API layer surfaces the payload and the graph literally cannot proceed until resumed. On resume, `decision["approved"]` drives `actions_approved`; a decline clears `pending_actions` and sets `email_status="discarded"`.
+- `route_confirmation(state) → "execute" | "skip"` — approved → `booking_execution`; declined → straight to `assemble`.
+- `booking_execution_node` — the **only** place a `BookingProvider` executes. Per pending action: `reserve()` then `confirm()`; one failed booking degrades (`degraded_flags`) without aborting the rest. `email_send` actions just flip `email_status` to `"approved"` — actual SMTP delivery is explicitly out of scope (no real send in Phase 4). Writes `confirmations` and the first confirmation's ID as `confirmation_id`.
+
+**`backend/app/main.py`** — extended for the interrupt/resume cycle
+
+- `POST /api/chat` now accepts an optional `thread_id` (generated if absent) — every checkpointed run needs one.
+- `_stream_graph()` watches for `"__interrupt__"` in the `astream(stream_mode="updates")` chunk: emits `event: interrupt` with `{thread_id, pending_actions, email_draft}` and **returns** — the SSE stream ends there, no `done` event yet.
+- `POST /api/chat/resume` `{thread_id, approved}` → `graph.astream(Command(resume={"approved": approved}), ...)`, streamed the same way as a fresh run.
+- `app.mount("/reservation", reservation_app)` — the mock reservation service is live and curl-able on the deployed Space.
+- `done` payload extended with `confirmations`, `calendar_ics`, `email_draft`, `email_status`.
+
+---
+
+### Activities/Booking Subagent
+
+**`backend/app/agents/activities_booking.py`** — `activities_node`: the fifth specialist agent
+
+Search-arg extraction on `small` tier (`render("activities_booking/search_extraction")` → cuisine, event keyword, party size), venue selection reasoning on `large` tier (`render("activities_booking/selection_reasoning")`). Restaurant search via Overpass (cached, `CACHE_TTL_PLACES = 86400`), events via Ticketmaster (search-only, no cache — deep links go stale fast). The chosen restaurant is only *proposed* here (`selected_restaurant`); the actual reservation goes through the mock `BookingProvider` inside `booking_execution`, same seam as flights.
+
+**`backend/app/tools/places.py`** — `PlacesTool`: Overpass (OpenStreetMap) search, no key required. Geocodes via Nominatim, queries Overpass for `amenity=restaurant` (optional cuisine tag filter) within a 3 km radius. `venue_id` is a stable OSM ref (`"osm:node/123456"`) — it doubles as the `offer_id` a restaurant reservation routes through the mock provider.
+
+**`backend/app/tools/events.py`** — `EventsTool`: Ticketmaster Discovery API. Search-only by design — deep links, never in-app ticketing (partner-gated, real money). Eventbrite is explicitly *not* called: its public search endpoint was retired in 2019; the seam name survives in the module docstring for a future partner token.
+
+**`backend/app/tools/geo.py`** — extracted shared Nominatim geocoding (`geocode`, `USER_AGENT`) out of `weather.py`, now used by both `weather` and `places`.
+
+---
+
+### RAG Query Decomposition
+
+**`backend/app/rag/decompose.py`** — `decompose_node`: the multi-passport / multi-city fan-out
+
+`small`-tier call (`render("orchestrator/decompose_query")`, `json_mode=True`) splits a multi-part query into `sub_queries: [{query, passport, destination, kind}]`. "One US passport, one Indian passport → Japan" becomes two visa lookups (US→JP, IN→JP); "Tokyo then Kyoto then Osaka" becomes per-city retrieval. A single-subject query yields exactly one sub-query — the degenerate case is byte-identical to the Phase 2/3 path. Piggybacks `booking_requested` extraction (no second intent call) via a regex fallback (`_BOOKING_RE`) if the LLM parse fails, so booking-gate detection never silently disables.
+
+**`backend/app/agents/rag.py`** — extended for fan-out
+
+`rag_node` reads `state["sub_queries"]` (falls back to a single synthetic sub-query when absent, e.g. direct node invocation in tests). Resolves each `(passport, destination)` pair to an ISO code up front via `_resolve_country_iso`, retrieves independently through the unchanged Phase 2 `retrieve()` pipeline (sequential — 2-3 sub-queries don't justify `Send`-API state-merge complexity), then makes **one** large-tier synthesis call over labeled per-subquery source blocks (`=== {passport} passport → {destination} ===`) to produce a single per-traveler/per-city cited answer. Cache key folds in every sub-query's ISO + passport, so a two-passport query has its own cache slot.
+
+Also new: `_staleness_warning()` — checks each retrieved chunk's `last_verified` against `settings.STALENESS_THRESHOLD_DAYS` (per-collection) and appends a "⚠ … may be out of date" note to `visa_answer` if any chunk aged past threshold. Re-evaluated on every read, including cache hits, so a cached answer still warns once its underlying chunk goes stale.
+
+---
+
+### RAG Staleness Detection + Automated Re-ingestion
+
+**`backend/app/rag/staleness.py`** — `refresh_country(iso, passport, collections)`
+
+Uses the hooks seeded in Phase 2: every chunk already carries `content_hash` + `last_verified`. Refresh re-fetches each source, re-chunks, and **hashes before embedding** (hashing is free, embedding is not), then diffs against the hashes stored in Qdrant (`_stored_hashes`, filtered by `country_iso` + `passport_nationality` + `source_url`):
+- unchanged chunk → `last_verified` bumped in place via `set_payload` — zero embed cost
+- new/changed chunk → embedded + upserted
+- orphaned chunk (source no longer contains it) → deleted
+
+Only changed documents pay for embedding, which is what makes the daily scheduled job cheap enough to run on GitHub Actions free minutes. Returns a `ReingestReport` (`unchanged_chunks`, `new_chunks`, `deleted_chunks`, `errors`).
+
+**`scripts/reingest.py`** — CLI: `--collections advisories visa_entry destination_guides` (required, at least one), `--country ISO` (default: all 50), `--passport` (default `US`). Exits non-zero if any country's refresh recorded errors.
+
+**`.github/workflows/reingest.yml`** — scheduled outside the web app (Phase 0 decision: survives free-tier Space sleep). One workflow, three cadences via cron, each selecting which collections to refresh: `advisories` daily (`0 6 * * *`), `visa_entry` weekly (`0 7 * * 1`), `destination_guides` monthly (`0 8 1 * *`). Also `workflow_dispatch` for manual runs with `collections`/`country` inputs.
+
+**`backend/app/rag/ingest.py`** — internals (`_ensure_collection`, `build_point`, `fetch_country_sources`) exposed as module-level functions so `staleness.py` reuses the exact same chunking/embedding/payload-shaping logic rather than duplicating it — the diff is only ever comparing like-for-like hashes.
+
+---
+
+### LLM JSON Mode & Shared Parsing
+
+Closed two `TODO(phase-4)` markers left over from Phase 3.
+
+**`backend/app/llm/client.py`** — `LLMClient.complete()` gains `json_mode: bool = False`. When set, requests the provider's native JSON-object response format (`response_format: {"type": "json_object"}` — both Gemini and Groq expose this via their OpenAI-compatible API) instead of relying on prompt instruction alone. Wired into every call site expecting structured JSON back (decompose, plan, action, activities, RAG resolve).
+
+**`backend/app/llm/parsing.py`** — `parse_json_dict(text, default=None, *, context="") → dict` (new module): a single defensive parse-or-default helper, replacing ad-hoc `json.loads()`/try-except pairs scattered across guardrails, agents, and orchestrator nodes. Never raises — falls back to `default` (or `{}`) on invalid JSON or a non-dict result, logging a warning with `context` for traceability.
+
+**Bug found and fixed while verifying `json_mode` live**: `agents/rag.py`'s cache-hit path did direct subscript access (`cached_data["visa_answer"]`) on whatever `json.loads()` returned, with no shape check — a malformed or stale-shaped cache entry raised a bare `KeyError` that escaped `graph.invoke()`. Now falls through to a live re-fetch instead.
+
+**Bug found and fixed in the prompt library**: 6 templates with `input_variables: []` contained doubled braces (`{{"key": "value"}}`) intended for `str.format()` escaping, but `render()` never calls `.format()` when there are no input variables — so the model saw literal double braces in its own instructions and sometimes echoed them back as invalid JSON. Fixed `router_intent`, `budget_allocation`, `plan_dispatch`, both `argument_extraction` templates (weather + travel_search); version bumped and changelog updated on each. `output_no_hallucinated_booking.yaml` was untouched — it has real `input_variables`, so its escaping is correct there.
+
+`run_prompt_eval.py` now requests `json_mode` whenever a prompt declares an `output_schema`.
+
+---
+
+### Assemble & Frontend — Confirmation Gate UI
+
+**`backend/app/orchestrator/nodes/assemble.py`** — extended (v3)
+
+New sections folded into the itinerary context: **reservations** (the *only* source the summary is allowed to make booking claims from — reads `state["confirmations"]`; falls back to "proposed but not yet confirmed" when `pending_actions` exist without confirmations, or "No bookings were made" otherwise) and **actions taken** (calendar hold created / email drafted-awaiting-confirmation / email approved-and-released / email discarded). Restaurant + events also folded into the existing weather/flight/hotel/budget/visa sections.
+
+**Frontend** — `frontend/src/hooks/useStream.js` extended with an `awaiting_confirmation` status and `respondToConfirmation(approved)`; on an `interrupt` SSE event, the last message gets an `interrupt: {threadId, pendingActions, emailDraft}` payload and the stream ends there (no `done` yet). `frontend/src/api/chat.js` adds `resumeChat(threadId, approved) → POST /api/chat/resume`, same SSE parsing as `streamChat`. `frontend/src/components/MessageList.jsx` adds a `ConfirmationGate` component (pending-actions list, email draft preview, Approve/Decline buttons) and a `ReservationsAndActions` component (confirmation list with confirmation IDs, calendar/email status notes). `frontend/src/App.jsx` wires `respondToConfirmation` from the hook into `MessageList`.
+
+---
+
+### Prompt Registry — Phase 4 Additions
+
+| File | Tier | Description |
+|---|---|---|
+| `orchestrator/decompose_query.yaml` | small | Multi-passport/multi-city sub-query fan-out; `{sub_queries, booking_requested}` |
+| `action/email_drafting.yaml` | large | Drafts the itinerary email; `{subject, body}` |
+| `activities_booking/search_extraction.yaml` | small | Cuisine/event-keyword/party-size extraction |
+| `activities_booking/selection_reasoning.yaml` | large | Picks one restaurant from candidates; `{venue_id, name, slot, party_size, reason}` |
+
+**Modified in Phase 4** (json_mode wiring + doubled-brace fix, no behavior change to what they extract): `orchestrator/router_intent`, `orchestrator/plan_dispatch`, `orchestrator/budget_allocation`, `weather/argument_extraction`, `travel_search/argument_extraction`. **Modified for new behavior**: `rag/synthesis` (multi-subject labeled-block synthesis), `orchestrator/assemble_itinerary` (v3 — reservations/actions), `guardrails/output_no_hallucinated_booking` (enforcement wording).
+
+All 17 active prompts have paired per-prompt eval cases under `tests/eval/cases/` (was 13 at end of Phase 3).
+
+---
+
+### Config — Phase 4 Additions
+
+New fields in `backend/app/config.py` / `.env.example`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOOKING_PROVIDER_MAP` | `{"flight": "duffel", "hotel": "duffel", "restaurant": "mock"}` | booking type → provider backend |
+| `RESERVATION_SERVICE_URL` | `None` | `None` = in-process ASGI transport; set for the networked microservice topology |
+| `OVERPASS_BASE_URL` | `https://overpass-api.de/api/interpreter` | Restaurant/attraction search |
+| `BOOKING_PASSENGER` | demo traveller dict | Passenger/guest details for Duffel sandbox orders (no real identity) |
+| `RAG_DATA_VERSION` | `"v1"` | Data-version slug in RAG cache keys; bump to invalidate stale entries without a full flush |
+| `STALENESS_THRESHOLD_DAYS` | `{advisories: 2, visa_entry: 14, destination_guides: 60}` | Max chunk age before a "verify before travel" warning attaches |
+| `CACHE_TTL_PLACES` | 86400 | Restaurant/attraction search cache TTL |
+
+`TICKETMASTER_API_KEY` (provisioned Phase 0, unused until now) becomes load-bearing for `EventsTool`.
+
+---
+
+### Eval & Tests — Phase 4 Additions
+
+**`backend/tests/eval/dataset.jsonl`** — extended from 3 → 5 cases, both new ones `ci_skip: true` (excluded from the CI-gating smoke set by default — extra live LLM/Duffel/reservation calls; `run_eval.py --all` includes them locally):
+- `decompose-narrative-two-passports-japan` — two-passport query must fan out into ≥ 2 sub-queries (`expected_min_sub_queries`).
+- `booking-narrative-tokyo-full-stack` — explicit booking request must hit the confirmation gate, produce a real `confirmation_id` after auto-approval, and the no-hallucinated-booking guardrail must not fire (`expected_confirmation`).
+
+**`backend/tests/eval/run_eval.py`** — extended:
+- Auto-approves any run that hits the confirmation gate (`"__interrupt__" in result` → `graph.invoke(Command(resume={"approved": True}), config=config)`) so a booking narrative can complete in one eval pass — a real run still requires an explicit human decision; the harness stands in for one.
+- `expected_min_sub_queries` and `expected_confirmation` checks added.
+- `--all` flag includes `ci_skip` cases; omitted by default in CI.
+- The Phase-3-era bare `except KeyError` workaround around `graph.invoke()` (a TODO note about quota-limited non-dict LLM responses) is removed now that `parse_json_dict` handles that class of failure at the source.
+
+**`backend/tests/eval/run_prompt_eval.py`** — accepts multiple prompt IDs on the command line; requests `json_mode` when a prompt declares an `output_schema`.
+
+**`.github/workflows/ci.yml`** — per-prompt smoke gate now runs `orchestrator/router_intent orchestrator/decompose_query` (was `router_intent` alone).
+
+**New unit test files** (offline, monkeypatched LLM/Qdrant/HTTP): `test_booking_provider.py` (7), `test_reservation_service.py` (12 — idempotency, conflict, confirm, cancel semantics against the real FastAPI app via `TestClient`), `test_duffel_provider.py` (9), `test_action.py` (13), `test_activities.py` (9), `test_decompose.py` (9), `test_staleness.py` (9), `test_llm_parsing.py` (7). `test_guardrails.py` extended with a no-hallucinated-booking test class. `test_rag.py` extended with cache-hit malformed-payload regression tests.
+
+**Total unit tests: 177** (was 86 after Phase 3). All pass; `ruff check backend/` is clean.
+
+---
+
+### Dependencies — Phase 4 Additions (`pyproject.toml`)
+
+| Package | Purpose |
+|---|---|
+| `icalendar>=6.0` | `.ics` calendar hold generation |
+
+**Removed**: `duffel-api` — the SDK's v1-shaped models no longer match the current Duffel API; `duffel_provider.py` and the extended `tools/duffel.py` call the REST API directly via `httpx` instead.
+
+---
+
+### Phase 4 Exit State
+
+- Graph topology extended to 19 nodes: `decompose` (multi-subject fan-out) and `activities` (fifth parallel agent) added; `action → confirmation_gate → booking_execution` risk-tiered action layer wired in ✅
+- `BookingProvider` abstraction: one contract, two backends (Duffel real sandbox bookings for flights/hotels, self-hosted mock microservice for restaurants) routed by config, not code ✅
+- Mock reservation microservice has real partner-API semantics — idempotent reserve, `409` slot conflicts, confirm-mints-ID, cancel/rollback — runnable mounted, standalone, or in-process ✅
+- Confirmation gate is a **graph edge** (`interrupt()`), not a model decision — the high-risk path structurally cannot complete without an explicit human resume; `booking_execution` is the sole writer of `confirmation_id` ✅
+- No-hallucinated-booking guardrail enforced (was design-only in Phase 3): a booking claim without a real `confirmation_id` fails the output gate and routes to reflection ✅
+- Query decomposition: multi-passport/multi-city queries fan out into independent RAG retrievals, merged into one cited per-subject synthesis; single-subject queries remain the byte-identical degenerate case ✅
+- RAG staleness detection + scheduled re-ingestion: content-hash diffing means only changed documents are re-embedded; three cron cadences keep the 50-country corpus fresh on free CI minutes ✅
+- Activities/Booking subagent: Overpass restaurant search + Ticketmaster event search (deep links only, no in-app ticketing); one restaurant proposed per run ✅
+- `json_mode` enforces structured LLM output server-side; `parse_json_dict` centralizes defensive parsing; a real `KeyError` and 6 doubled-brace prompt bugs found and fixed while wiring it ✅
+- Frontend: confirmation-gate UI (pending actions, email draft preview, Approve/Decline) and reservations/actions display wired into the chat stream ✅
+- Full-graph narrative eval cases (decomposition fan-out, booking-gate confirmation) added, kept out of the CI-gating smoke set to conserve quota; `run_eval.py --all` runs them locally ✅
+- 177/177 unit tests pass; `ruff check backend/` clean ✅
+
+---
+
+### Post-Phase-4: PII Redaction & RAG Ingestion Pipeline Repair
+
+**Status: Complete (2026-07-13, same day as Phase 4 Step 10).**
+
+Two bugs surfaced while verifying the Phase 4 decomposition narrative case end-to-end, both fixed the same session:
+
+**1. PII redaction was corrupting travel-domain text.** `backend/app/guardrails/pii.py`'s `redact()` used Presidio's full default entity set, which includes `LOCATION`, `NRP` (nationality), and `DATE_TIME` — none of which are actually sensitive in a travel app, all of which are exactly what a travel query is built from. "Plan a trip to Tokyo, Japan next month" became "Plan a trip to `<LOCATION>`, `<LOCATION>` `<DATE_TIME>`" *before* decompose/RAG/travel-search ever saw it. Fixed with a **denylist** (`_EXCLUDED_ENTITIES = {LOCATION, NRP, DATE_TIME}`, computed dynamically against Presidio's live `get_supported_entities()`), not a hardcoded allowlist — a literal allowlist would have silently stopped redacting `US_PASSPORT`, `US_SSN`, `US_BANK_NUMBER`, and every other entity type Presidio protects today or adds later. New `backend/tests/unit/test_pii.py` (9 tests).
+
+**2. The RAG corpus was empty in the real Qdrant cluster** — six independent, layered bugs, each masking the next:
+- `retriever.py`/`ingest.py` read `os.getenv("QDRANT_URL")` directly; the app loads config exclusively via pydantic-settings, which never populates `os.environ` — so the URL was always `None` locally, silently falling back to an empty `QdrantClient(":memory:")` on every run.
+- `travel.state.gov` retired its ISO-code URL scheme for a name-slugged one; `ingest.py` now carries a static slug table for the 50 curated countries.
+- `restcountries.com`'s free v3.1 API was retired; switched to v5 (signup key, `settings.RESTCOUNTRIES_API_KEY`), gracefully skipping `destination_guides` when unset.
+- `qdrant-client` 1.18 dropped `.search()` for `.query_points()` — `retriever.py`'s only call site was silently `AttributeError`-ing, caught by `retrieve()`'s fail-open contract and read as "no results" rather than a crash; invisible to tests because the mock client implemented the old signature.
+- Qdrant Cloud rejects filtering on a payload field without an explicit index — `_ensure_collection` now creates keyword indexes on `country_iso`/`passport_nationality`/`source_url`.
+- `_HTMLStripper` wasn't skipping `<script>`/`<style>` tag contents — chunks were embedding raw JavaScript instead of advisory prose.
+- `build_point()`'s point ID was derived from `content_hash` alone, which is passport-independent — ingesting the same country under two different passports silently overwrote the first passport's point, exactly the two-passport demo case. ID now folds in `country_iso` + `passport`.
+
+Verified live end-to-end: `retrieve()` returns real grounded chunks per passport from the real cluster, and a full graph run produces a source-cited `visa_answer` for the two-passport Tokyo query. 189/189 unit tests pass (177 + 9 new PII tests + 3 more from ingestion-pipeline test updates); `ruff check backend/` clean.
+
+---
+
 | Variable | Required now | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | Yes | LLM calls + embeddings |
@@ -733,3 +1050,9 @@ run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_int
 | `CACHE_TTL_VISA_DOCS` | No | Visa doc cache TTL seconds (default 86400) |
 | `CACHE_TTL_WEATHER` | No | Weather cache TTL seconds (default 3600) |
 | `CACHE_SEMANTIC_SIMILARITY_THRESHOLD` | No | Semantic cache cosine threshold (default 0.92) |
+| `TICKETMASTER_API_KEY` | Phase 4 | Event search (`EventsTool`) |
+| `RESERVATION_SERVICE_URL` | No | Empty = in-process mock booking; set for the networked microservice topology |
+| `RESTCOUNTRIES_API_KEY` | No | `destination_guides` ingestion (v5 API requires a signup key) |
+| `BOOKING_PROVIDER_MAP` | No | JSON map, booking type → provider (default fine for the demo) |
+| `RAG_DATA_VERSION` | No | Bump to invalidate all cached RAG answers after a corpus change |
+| `CACHE_TTL_PLACES` | No | Restaurant/attraction search cache TTL seconds (default 86400) |
