@@ -12,6 +12,7 @@ Not retryable: 4xx client errors (except 429), validation failures,
 
 import logging
 import random
+import re
 import time
 from collections.abc import Callable
 from typing import TypeVar
@@ -21,6 +22,24 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+# Providers often tell you exactly how long to wait on a 429 — Gemini's error
+# body includes a structured 'retryDelay': '58s' field and/or message text
+# like "Please retry in 58.6s". Respecting that beats guessing with a fixed
+# exponential schedule, especially for a per-day quota where the suggested
+# delay can be much longer than our default backoff would ever reach.
+_RETRY_DELAY_RE = re.compile(r"retry.{0,15}?(\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+_MAX_SUGGESTED_DELAY_S = 60.0
+
+
+def _extract_suggested_delay(exc: Exception) -> float | None:
+    """Best-effort parse of a provider-suggested retry delay from the
+    exception's string form. Returns None if no delay hint is found —
+    callers should fall back to the standard exponential schedule."""
+    match = _RETRY_DELAY_RE.search(str(exc))
+    if not match:
+        return None
+    return min(float(match.group(1)), _MAX_SUGGESTED_DELAY_S)
 
 
 def is_retryable(exc: Exception) -> bool:
@@ -67,7 +86,10 @@ def with_retry(
 ) -> T:
     """Call fn with exponential backoff + jitter on retryable errors.
 
-    Delays: ~1s, ~2s, ~4s (base_delay * 2^attempt + U(0, 0.5s) jitter).
+    Delays: ~1s, ~2s, ~4s (base_delay * 2^attempt + U(0, 0.5s) jitter) —
+    unless the provider tells us how long to wait (e.g. Gemini's 429 body
+    includes 'retryDelay'), in which case that's used instead, capped at
+    _MAX_SUGGESTED_DELAY_S so a large per-day-quota delay doesn't hang CI.
     Non-retryable exceptions propagate immediately without delay.
     Raises the last exception if all attempts are exhausted.
     """
@@ -80,7 +102,8 @@ def with_retry(
                 raise  # propagate immediately — retry won't help
             last_exc = exc
             if attempt < attempts - 1:
-                delay = base_delay * (2**attempt) + random.uniform(0, 0.5)
+                suggested = _extract_suggested_delay(exc)
+                delay = suggested if suggested is not None else base_delay * (2**attempt) + random.uniform(0, 0.5)
                 logger.warning(
                     "retry: attempt %d/%d failed (%s: %s), retrying in %.1fs",
                     attempt + 1,

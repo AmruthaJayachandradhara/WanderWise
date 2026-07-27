@@ -69,6 +69,47 @@ DATASET_PATH = Path(__file__).parent / "dataset.jsonl"
 # if it does, that's a genuine outage, not something to wave through.
 _STUB_TEXT = "[Service temporarily unavailable. Please try again shortly.]"
 
+# Floor for "is the corpus actually populated" — deliberately just "not
+# empty" rather than a count tuned to a specific ingest scale. As of
+# 2026-07-27, travel.state.gov blocks ingestion (Cloudflare bot challenge —
+# see backend/app/rag/ingest.py:fetch_country_sources), so the corpus is
+# legitimately small and Japan-only rather than the hundreds-of-points-per-
+# collection a full 50-country ingest would otherwise produce. This check's
+# job is to catch a genuinely dead/empty cluster (the original failure mode:
+# 404s, 0 points anywhere) — not to assume the corpus is that empty by design.
+_MIN_COLLECTION_POINTS = 1
+_RAG_COLLECTIONS = ("visa_entry", "advisories", "destination_guides")
+
+
+def _check_corpus_populated() -> str | None:
+    """Return an actionable error message if any RAG collection looks
+    underpopulated or unreachable, else None. Qdrant being reachable but
+    near-empty (e.g. a fresh/recreated cluster) produces a low Hit@5 rate
+    that looks like a retrieval regression but is actually a data problem —
+    this surfaces that distinction immediately instead of burying it in a
+    percentage at the bottom of the log."""
+    try:
+        from qdrant_client import QdrantClient
+
+        client = (
+            QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
+            if settings.QDRANT_URL
+            else QdrantClient(":memory:")
+        )
+        existing = {c.name for c in client.get_collections().collections}
+        for name in _RAG_COLLECTIONS:
+            if name not in existing:
+                return f"Qdrant collection {name!r} does not exist — run scripts/ingest_corpus.py --all"
+            count = client.get_collection(name).points_count or 0
+            if count < _MIN_COLLECTION_POINTS:
+                return (
+                    f"Qdrant collection {name!r} underpopulated: {count} < "
+                    f"{_MIN_COLLECTION_POINTS} points — run scripts/ingest_corpus.py --all"
+                )
+    except Exception as exc:
+        return f"Could not verify corpus population ({exc}) — is QDRANT_URL reachable?"
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Aggregate counters
@@ -518,6 +559,16 @@ def run_eval(suite: str = "ci", json_out: Path | None = None) -> int:
     agg = _Aggregates()
     case_results: list[dict] = []
 
+    # Fail fast with a clear, actionable message if the corpus itself is the
+    # problem — a near-empty Qdrant collection produces a low Hit@5 rate that
+    # looks like a retrieval regression but is actually a data problem. Only
+    # checked once, and only if this suite actually runs retrieval cases.
+    corpus_issue: str | None = None
+    if any(c.get("mode") == "retrieval" for c in cases):
+        corpus_issue = _check_corpus_populated()
+        if corpus_issue:
+            logger.error("Corpus precondition failed — %s", corpus_issue)
+
     for i, case in enumerate(cases):
         is_llm_free = case.get("llm_free", False)
         if i > 0 and not is_llm_free:
@@ -529,7 +580,11 @@ def run_eval(suite: str = "ci", json_out: Path | None = None) -> int:
 
         if mode == "retrieval":
             agg.hit5_total += 1
-            passed, detail = _run_retrieval_case(case)
+            if corpus_issue:
+                # Don't bother querying — we already know why this will miss.
+                passed, detail = False, f"skipped — {corpus_issue}"
+            else:
+                passed, detail = _run_retrieval_case(case)
             if passed:
                 agg.hit5_hits += 1
             else:

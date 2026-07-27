@@ -7,7 +7,12 @@ Follows the same monkeypatch-everything pattern as test_budget.py.
 import pytest
 
 from backend.app.reliability.circuit import CLOSED, HALF_OPEN, OPEN, CircuitBreaker
-from backend.app.reliability.retry import is_rate_limit, is_retryable, with_retry
+from backend.app.reliability.retry import (
+    _extract_suggested_delay,
+    is_rate_limit,
+    is_retryable,
+    with_retry,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +69,59 @@ def test_with_retry_propagates_non_retryable_immediately():
     with pytest.raises(ValueError):
         with_retry(fn, attempts=3, base_delay=0)
     assert len(calls) == 1  # raised on first attempt, no retry
+
+
+# ---------------------------------------------------------------------------
+# _extract_suggested_delay (Phase 5) — respect provider-suggested retry delay
+# ---------------------------------------------------------------------------
+
+def test_extract_suggested_delay_from_gemini_style_message():
+    # Real ordering observed live: the human-readable "Please retry in Ns"
+    # message text comes before the structured 'retryDelay' field in the
+    # details list — the regex takes the first match it finds.
+    exc = Exception(
+        "Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded "
+        "your current quota. Please retry in 58.619425972s.', 'status': "
+        "'RESOURCE_EXHAUSTED', 'details': [{'retryDelay': '58s'}]}}]"
+    )
+    assert _extract_suggested_delay(exc) == 58.619425972
+
+
+def test_extract_suggested_delay_caps_at_max():
+    exc = Exception("Please retry in 300s")
+    assert _extract_suggested_delay(exc) == 60.0
+
+
+def test_extract_suggested_delay_none_when_absent():
+    exc = Exception("connection reset by peer")
+    assert _extract_suggested_delay(exc) is None
+
+
+def test_with_retry_uses_suggested_delay_over_exponential(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("backend.app.reliability.retry.time.sleep", sleeps.append)
+    calls = []
+    def fn():
+        calls.append(1)
+        if len(calls) < 2:
+            raise Exception("429 quota exceeded, retry in 5s")
+        return "recovered"
+    assert with_retry(fn, attempts=3, base_delay=1.0) == "recovered"
+    assert sleeps == [5.0]  # suggested delay used verbatim, not 1.0 * 2**0 + jitter
+
+
+def test_with_retry_falls_back_to_exponential_when_no_delay_hint(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("backend.app.reliability.retry.time.sleep", sleeps.append)
+    monkeypatch.setattr("backend.app.reliability.retry.random.uniform", lambda a, b: 0.0)
+    calls = []
+    def fn():
+        calls.append(1)
+        if len(calls) < 2:
+            raise _StatusError(503)
+        return "recovered"
+    assert with_retry(fn, attempts=3, base_delay=1.0) == "recovered"
+    assert sleeps == [1.0]  # base_delay * 2**0 + 0 jitter
 
 
 def test_is_retryable_timeout():

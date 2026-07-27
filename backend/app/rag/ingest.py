@@ -124,6 +124,17 @@ def fetch_country_sources(country_iso: str) -> tuple[list[tuple[str, str, str]],
     if slug:
         advisory_url = _ADVISORY_URL.format(slug=slug)
         try:
+            # As of 2026-07-27, travel.state.gov returns 403 "Attention
+            # Required" (Cloudflare bot challenge) for every request here,
+            # regardless of User-Agent — confirmed via direct curl testing,
+            # not just this client. This is a site-side anti-bot posture
+            # change, not a code bug; no header tweak fixes it. Until an
+            # alternative source is wired in, ingestion silently yields no
+            # advisory/visa_entry text for any country without pre-existing
+            # data (fails open to a warning below, same as any other
+            # unreachable-URL case) — Phase 5's eval dataset was adjusted to
+            # test only against Japan, the one country with real ingested
+            # data from before this block began.
             resp = httpx.get(advisory_url, timeout=_TIMEOUT_S, follow_redirects=True)
             if resp.status_code == 200:
                 advisory_text = _strip_html(resp.text)[:8000]
