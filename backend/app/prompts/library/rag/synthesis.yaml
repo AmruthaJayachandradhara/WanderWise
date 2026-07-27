@@ -1,5 +1,5 @@
 prompt_id: rag/synthesis
-version: 2
+version: 3
 tier: large
 status: active
 description: >
@@ -37,10 +37,15 @@ input_variables: []
 
 eval:
   dataset: tests/eval/cases/rag/synthesis.jsonl
-  metric: schema_valid
-  threshold: 1.00
+  metric: llm_judge
+  threshold: 0.80
 
 changelog:
+  - version: 3
+    date: 2026-07-26
+    change: >
+      Phase 5 — metric: llm_judge (faithfulness judge from
+      backend/tests/eval/judges.py). Sampled, nightly, off the PR path.
   - version: 2
     date: 2026-07-13
     change: "Phase 4 Step 7 — per-traveler/per-city merge over subject-grouped sources."

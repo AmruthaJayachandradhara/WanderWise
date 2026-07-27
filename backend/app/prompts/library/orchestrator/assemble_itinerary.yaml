@@ -1,5 +1,5 @@
 prompt_id: orchestrator/assemble_itinerary
-version: 3
+version: 4
 tier: large
 status: active
 description: >
@@ -51,10 +51,16 @@ input_variables: []
 
 eval:
   dataset: tests/eval/cases/orchestrator/assemble_itinerary.jsonl
-  metric: schema_valid
-  threshold: 1.00
+  metric: llm_judge
+  threshold: 0.70
 
 changelog:
+  - version: 4
+    date: 2026-07-26
+    change: >
+      Phase 5 — metric: llm_judge (helpfulness judge from
+      backend/tests/eval/judges.py: specificity/actionability/honesty).
+      Sampled, nightly, off the PR path.
   - version: 3
     date: 2026-07-13
     change: >

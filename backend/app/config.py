@@ -117,6 +117,26 @@ class Settings(BaseSettings):
     CACHE_TTL_PLACES: int = 86400        # 24h — OSM venues change slowly (Phase 4)
     CACHE_SEMANTIC_SIMILARITY_THRESHOLD: float = 0.92
 
+    # --- Eval thresholds (Phase 5) — single source read by run_eval.py /
+    # run_prompt_eval.py / report.py so CI, nightly, and the eval report never
+    # drift from each other.
+    EVAL_RETRIEVAL_HIT5_MIN: float = 0.85
+    EVAL_ROUTING_ACCURACY_MIN: float = 0.90
+    EVAL_DECOMPOSITION_MIN: float = 0.90
+    EVAL_BLOCK_RATE_MIN: float = 0.95
+    EVAL_FALSE_BLOCK_RATE_MAX: float = 0.05
+    EVAL_BUDGET_VALIDITY_MIN: float = 1.0
+    EVAL_TEMPORAL_VALIDITY_MIN: float = 1.0
+    EVAL_FAULT_HANDLING_MIN: float = 1.0
+    EVAL_LLM_COOLDOWN_S: int = 30  # sleep between LLM-consuming graph eval cases
+
+    # --- LLM-as-judge (Phase 5) ---
+    JUDGE_MODEL_TIER: str = "large"  # tier, not model id — provider-agnostic
+    JUDGE_SAMPLE_RATE: float = 0.5   # fraction of eligible cases judged per nightly run
+    EVAL_FAITHFULNESS_MIN: float = 0.90
+    EVAL_MERGE_QUALITY_MIN: float = 0.75
+    EVAL_HELPFULNESS_MIN: float = 0.70
+
     # --- App & Deployment ---
     LOG_LEVEL: str = "INFO"
     APP_PORT: int = 7860  # HF Spaces Docker default

@@ -1,8 +1,12 @@
 """LLM client — the single interface the whole system calls.
 
 Callers pass a tier ("small" or "large"), never a model name.
-The active provider is selected by config (Gemini default, Groq when
-USE_GROQ_FALLBACK=True). Swapping providers requires zero code changes.
+The PRIMARY provider is selected by config (Gemini default, Groq when
+USE_GROQ_FALLBACK=True). Swapping the primary provider requires zero code
+changes. Note this is separate from the FALLBACK path below: that's driven
+by GROQ_API_KEY being set (see reliability/fallback.py), independent of
+USE_GROQ_FALLBACK — Groq can be the fallback for a Gemini primary, the
+primary itself, or both.
 
 Phase 3 additions:
 - Exponential backoff retry on transient transport errors (timeout, 429, 5xx)

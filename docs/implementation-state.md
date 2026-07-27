@@ -12,7 +12,7 @@
 | **Live URL** | https://gwuwanderwise-wanderwise.hf.space |
 | **HF Space** | `GwuWanderwise/wanderwise` (Docker SDK, port 7860) |
 | **Language** | Python 3.12 (uv), Node 20 (Vite + React) |
-| **Current phase** | Phase 4 complete |
+| **Current phase** | Phase 5 complete |
 
 ---
 
@@ -597,7 +597,17 @@ New fields in `backend/app/config.py` / `.env.example`:
 
 ## Temporary Eval Patch — Smoke-Only CI (Post-Phase-3)
 
-**Status: Active (applied 2026-07-02). Revert target: Phase 5.**
+**Status: Reverted (Phase 5, 2026-07-26).** All four restore-checklist items
+below have landed: Groq wired as a GitHub secret and exercised by CI/nightly,
+`dataset.jsonl` restored and expanded to 40 labeled cases, `ci.yml`'s
+per-prompt step widened from 1 prompt to 5 representative prompts (full
+13-prompt suite now runs nightly via `eval-nightly.yml`), and the
+`_DEGRADED_STUB_MARKER` skip logic removed from both runners — a degraded
+stub now hard-fails a case instead of being silently waved through. This
+section is kept for historical context; see `docs/wanderwise_phase5.md` and
+`docs/eval-report.md` for the current eval methodology.
+
+**Original status note (superseded): Active (applied 2026-07-02).**
 
 **Root cause:** Free-tier Gemini API exhausts quota (HTTP 429) when CI runs the full eval suite (11 graph cases + 47 per-prompt cases = 58 live LLM calls in one job). The fallback stub `"[Service temporarily unavailable. Please try again shortly.]"` is plain text, so per-prompt schema-valid checks fail → `pass_rate=0.00` → CI red.
 

@@ -1,0 +1,104 @@
+# Nightly full eval — the sampled LLM-judge layer, off the PR path (Phase 5).
+#
+# ci.yml gates every push with the fast, deterministic, zero/low-LLM-cost
+# suite. This workflow runs the full labeled surface (--suite all, ~40
+# cases) plus the sampled LLM-as-judge evals (faithfulness, merge quality,
+# helpfulness, grounding label-agreement), and regenerates the eval report.
+# Never blocks a PR — a flaky judge call here has no effect on merges.
+#
+# Quota math: ~40 graph cases (~17 LLM-consuming) + sampled judge calls
+# across 3 prompts (~10 cases at JUDGE_SAMPLE_RATE) is well under Gemini's
+# free-tier 1,500 requests/day cap. TRACE_SAMPLING=0.25 keeps LangSmith
+# ingestion sampled so a nightly run at this volume doesn't burn the free
+# Developer-tier monthly trace cap on its own.
+
+name: eval-nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  eval-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Inject pip into venv
+        run: uv pip install pip
+
+      - name: Cache fastembed model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-${{ hashFiles('pyproject.toml') }}
+
+      - name: Install spaCy model
+        run: uv run python -m spacy download en_core_web_lg
+
+      - name: Warm up fastembed model
+        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
+      # Full deterministic + fault-injection + retrieval + decomposition +
+      # budget/temporal suite (all 40 cases). Not CI-gating — informational,
+      # posted to the eval report.
+      - name: Run full graph eval (--suite all)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          DUFFEL_API_KEY: ${{ secrets.DUFFEL_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_TRACING: "true"
+          TRACE_SAMPLING: "0.25"
+        run: uv run python backend/tests/eval/run_eval.py --suite all --json-out artifacts/graph.json
+        continue-on-error: true
+
+      # Full 13-prompt suite, including the 3 llm_judge prompts, sampled.
+      # Judge scores are logged as LangSmith feedback (judges.log_feedback),
+      # keyed by prompt_id/prompt_version — feeds the per-prompt dashboard
+      # panel and eval-scores-over-time.
+      - name: Run full per-prompt eval with judges (--judge)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_TRACING: "true"
+          TRACE_SAMPLING: "0.25"
+        run: uv run python backend/tests/eval/run_prompt_eval.py --judge --json-out artifacts/prompts.json
+        continue-on-error: true
+
+      # Regenerate the eval report from tonight's artifacts + live
+      # LangSmith aggregates. Uploaded as a workflow artifact only — not
+      # auto-committed to main, to avoid nightly bot-commit noise (a push
+      # to main also triggers the HF Spaces deploy in ci.yml).
+      - name: Regenerate eval report
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+        run: uv run python backend/tests/eval/report.py artifacts/graph.json artifacts/prompts.json
+
+      - name: Upload eval artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-nightly-${{ github.run_id }}
+          path: |
+            artifacts/graph.json
+            artifacts/prompts.json
+            docs/eval-report.md
+          retention-days: 30

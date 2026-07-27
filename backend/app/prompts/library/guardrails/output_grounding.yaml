@@ -1,5 +1,5 @@
 prompt_id: guardrails/output_grounding
-version: 1
+version: 2
 tier: large
 status: active
 description: >
@@ -8,8 +8,11 @@ description: >
   by the provided sources. Only runs after deterministic checks (schema,
   budget) pass — so the judge sees valid, affordable outputs only.
 
-  metric: schema_valid now (Phase 3). metric: llm_judge wired in Phase 5
-  once the judge runner exists.
+  metric: llm_judge (Phase 5) — eval checks label agreement between this
+  prompt's own grounded/ungrounded verdict and a human-labeled expected
+  verdict per case (this prompt IS a judge, so "judging the judge" means
+  checking it against ground truth, not re-judging its output with another
+  judge). Sampled, nightly, off the PR path — see run_prompt_eval.py --judge.
 
 template: |
   You are a faithfulness judge for a travel information assistant.
@@ -51,10 +54,17 @@ output_schema:
 
 eval:
   dataset: tests/eval/cases/guardrails/output_grounding.jsonl
-  metric: schema_valid
+  metric: llm_judge
   threshold: 1.00
 
 changelog:
+  - version: 2
+    date: 2026-07-26
+    change: >
+      Phase 5 — metric: llm_judge. Eval now checks label agreement between
+      this prompt's own grounded/ungrounded verdict and a human-labeled
+      expected verdict per case (case files gained an "expected.grounded"
+      field). Sampled, nightly, off the PR path.
   - version: 1
     date: 2026-06-29
-    change: "Initial grounding judge prompt (Phase 3, Step 5). metric: llm_judge wired Phase 5."
+    change: "Initial grounding judge prompt (Phase 3, Step 5)."

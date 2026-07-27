@@ -56,32 +56,46 @@ jobs:
       - name: Run pytest
         run: uv run pytest backend/tests/unit/ -v --tb=short
 
-      # Smoke: run only router_intent + decompose_query (small-tier, ~8 cases
-      # total) to stay within free-tier quota. Full per-prompt eval across
-      # all prompts will be re-enabled in Phase 5 once a fallback provider
-      # (Groq / cached) is wired in.
-      - name: Run per-prompt eval gate (smoke)
+      # Phase 5: 5 representative prompts on every push (deterministic
+      # metrics only — llm_judge prompts are excluded by default, see
+      # run_prompt_eval.py's --judge flag). The full 13-prompt suite runs
+      # nightly (.github/workflows/eval-nightly.yml). Groq is wired as a
+      # fallback provider so transient 429s are absorbed rather than
+      # surfacing as a degraded stub that would fail schema checks.
+      - name: Run per-prompt eval gate (CI slice)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           LANGSMITH_TRACING: "false"
           TRACE_SAMPLING: "0"
-        run: uv run python backend/tests/eval/run_prompt_eval.py orchestrator/router_intent orchestrator/decompose_query
+        run: >
+          uv run python backend/tests/eval/run_prompt_eval.py
+          orchestrator/router_intent orchestrator/decompose_query
+          orchestrator/plan_dispatch rag/query_rewrite
+          travel_search/argument_extraction
 
       # Give Gemini free-tier quota (10 RPM) time to recover after the
       # per-prompt eval calls before hitting the graph eval.
       - name: Rate-limit cooldown
         run: sleep 30
 
-      # 3-case smoke eval: happy-path trip, injection block (regex — no LLM
-      # quota), and false-block prevention. All three pass even on 429 because
-      # the graph degrades gracefully to a non-empty stub response.
-      - name: Run eval gate (smoke)
+      # Phase 5: the full CI deterministic suite (--suite ci, ~23 cases —
+      # see backend/tests/eval/dataset.jsonl). Only ~5 of these consume LLM
+      # quota; the rest are zero-LLM (regex-blocked red-team, direct
+      # retrieval Hit@5, mocked fault-injection). Thresholds live in
+      # backend/app/config.py (single source). A regression below threshold
+      # fails the build and blocks the deploy job below.
+      - name: Run eval gate (CI suite)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Disable LangSmith tracing in CI to conserve free-tier quota
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          # Disable LangSmith tracing in CI to conserve free-tier quota —
+          # this is a pass/fail gate, tracing adds no signal here.
           LANGSMITH_TRACING: "false"
           TRACE_SAMPLING: "0"
-        run: uv run python backend/tests/eval/run_eval.py
+        run: uv run python backend/tests/eval/run_eval.py --suite ci
 
   # Deploy job — runs only on merge to main after tests pass
   deploy:
